@@ -1,0 +1,25 @@
+name: Test
+on: [push, pull_request]
+env:
+  DFN_COMMIT: d375b2d
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: DeepFilterNet (libDF)
+        shell: bash
+        run: |
+          git clone https://github.com/Rikorose/DeepFilterNet.git ../DeepFilterNet
+          cd ../DeepFilterNet && git checkout $DFN_COMMIT
+          cargo build --release -p deep_filter --no-default-features --features capi --lib
+      - name: Build + tests
+        shell: bash
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+          ctest --test-dir build -C Release --output-on-failure
