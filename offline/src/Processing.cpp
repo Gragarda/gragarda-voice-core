@@ -189,7 +189,8 @@ void limitTruePeak(AudioBuffer& b, float ceiling, float lookaheadMs, float relea
 // Nivellement lent multi-personnes : chaque passage de parole (fenetre 1 s autour, parole seulement) est ramene
 // vers le niveau median de la video, +-maxDb. Une personne loin du micro et une proche finissent au meme volume.
 // Les pauses gardent le gain de la parole voisine (pas de remontee du bruit dans les silences).
-static float levelSpeakers(AudioBuffer& b, float noiseDb, float maxDb)
+// speechDb : seuil au-dessus duquel un bloc de 100 ms compte comme de la parole.
+static float levelSpeakers(AudioBuffer& b, float speechDb, float maxDb)
 {
     const size_t B = (size_t)(0.1 * b.sampleRate), n = b.frames() / B; // blocs de 100 ms
     if (n < 20) return 0;
@@ -202,17 +203,17 @@ static float levelSpeakers(AudioBuffer& b, float noiseDb, float maxDb)
     }
     std::vector<float> sp;
     for (float l : lvl)
-        if (l > noiseDb + 12) sp.push_back(l);
+        if (l > speechDb) sp.push_back(l);
     if (sp.size() < 10) return 0;
     const float target = pct(sp, 0.5f);
     // niveau local de la parole : moyenne en puissance des blocs de parole a +-5 blocs
     std::vector<float> gDb(n, NAN);
     for (size_t k = 0; k < n; ++k) {
-        if (lvl[k] <= noiseDb + 12) continue;
+        if (lvl[k] <= speechDb) continue;
         double e = 0;
         int cnt = 0;
         for (size_t i = k >= 5 ? k - 5 : 0; i < std::min(n, k + 6); ++i)
-            if (lvl[i] > noiseDb + 12) { e += std::pow(10.0, lvl[i] / 10); ++cnt; }
+            if (lvl[i] > speechDb) { e += std::pow(10.0, lvl[i] / 10); ++cnt; }
         gDb[k] = std::clamp(target - (float)(10 * std::log10(e / cnt)), -maxDb, maxDb);
     }
     // pauses : interpolation entre les gains de parole voisins
@@ -283,6 +284,14 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         expand(b, a.voiceDb - 15.0f, info.expanderDb);
     }
 
+    // Passe 3 : la voix est propre, on la remesure. Tout ce qui suit (de-esser, nivellement, compresseur,
+    // loudness) se regle sur le vrai fond apres debruitage, pas sur le bruit de la prise brute.
+    info.clean = analyze(b);
+    const AnalysisResult& cl = info.clean;
+    // parole = au-dessus du fond propre, et a moins de 25 dB de la voix mediane (apres DeepFilterNet le fond
+    // tombe tres bas : un residu a -90 dBFS n'est pas une personne lointaine)
+    const float speechDb = std::max(cl.noiseDb + 12.0f, cl.voiceDb - 25.0f);
+
     // 4. EQ du preset
     const struct { Biquad::Type t; float f, db, q; } eq[] = {
         {Biquad::LowShelf, p.lowShelfHz, p.lowShelfDb, 0.7071f},
@@ -298,11 +307,11 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     }
 
     // 5. De-esser : seuil relatif a la sibilance moyenne mesuree
-    info.deessThreshDb = a.sibilanceDb + p.deessOffsetDb;
+    info.deessThreshDb = cl.sibilanceDb + p.deessOffsetDb;
     deess(b, info.deessThreshDb);
 
     // 5b. Nivellement multi-personnes (lent), puis plage dynamique remesuree pour doser le compresseur
-    info.levelDb = levelSpeakers(b, a.noiseDb, p.levelMaxDb);
+    info.levelDb = levelSpeakers(b, speechDb, p.levelMaxDb);
     float p10, p95;
     loudnessRange(b, p10, p95);
 
@@ -312,7 +321,7 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         const auto env = peakEnvDb(b);
         std::vector<float> voiced;
         for (size_t i = 0; i < env.size(); i += 48) // ponytail: 1 echantillon sur 48 suffit pour un percentile
-            if (env[i] > a.noiseDb + 10.0f) voiced.push_back(env[i]);
+            if (env[i] > speechDb) voiced.push_back(env[i]);
         // a 3:1, un niveau X dB au-dessus du seuil perd 2X/3 dB : on veut perdre `excess` au p95
         info.compThreshDb = pct(voiced, 0.95f) - 1.5f * excess;
         info.compressed = !voiced.empty();
@@ -324,7 +333,8 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     if (!std::isfinite(l0)) return info; // silence
     const float ceiling = dbToLin(p.ceilingDbtp - 0.1f); // marge pour l'interpolation entre gains
     const auto pre = b.ch;
-    float gainDb = std::clamp(p.targetLufs - (float)l0, -20.0f, 30.0f);
+    constexpr float kMaxGainDb = 36; // prise lointaine debruitee : la voix propre peut etre a -36 LUFS
+    float gainDb = std::clamp(p.targetLufs - (float)l0, -20.0f, kMaxGainDb);
     // Secante : sous limitation, +1 dB de gain ne rapporte qu'une fraction de dB de loudness
     float prevGain = 0, prevLufs = (float)l0;
     for (int it = 0; it < 8; ++it) { // ponytail: 8 passes de limiteur max ; converge en 2-3 sur de la voix
@@ -334,11 +344,11 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         limitTruePeak(b, ceiling);
         info.outLufs = (float)integratedLufs(b);
         const float err = p.targetLufs - info.outLufs;
-        if (std::fabs(err) < 0.1f || gainDb >= 30.0f) break;
+        if (std::fabs(err) < 0.1f || gainDb >= kMaxGainDb) break;
         const float slope = std::clamp((info.outLufs - prevLufs) / (gainDb - prevGain + 1e-6f), 0.1f, 1.0f);
         prevGain = gainDb;
         prevLufs = info.outLufs;
-        gainDb = std::min(30.0f, gainDb + err / slope);
+        gainDb = std::min(kMaxGainDb, gainDb + err / slope);
     }
     info.gainDb = gainDb;
     info.outTruePeakDb = linToDb(truePeak(b));
@@ -347,13 +357,13 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
 
 std::string ProcessInfo::toJson() const
 {
-    char s[448];
+    char s[512];
     std::snprintf(s, sizeof(s),
                   "{\"denoiser\":\"%s\",\"denoiseWet\":%.2f,\"levelDb\":%.1f,\"expanderDb\":%.1f,\"deessThreshDb\":%.1f,\"compressed\":%s,"
                   "\"compThreshDb\":%.1f,\"gainDb\":%.2f,\"outLufs\":%.2f,\"outTruePeakDb\":%.2f}",
                   denoiser, denoiseWet, levelDb, expanderDb, deessThreshDb, compressed ? "true" : "false", compThreshDb, gainDb,
                   outLufs, outTruePeakDb);
-    return s;
+    return std::string(s, s + std::strlen(s) - 1) + ",\"clean\":" + clean.toJson() + "}";
 }
 
 } // namespace gv

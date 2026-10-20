@@ -5,7 +5,8 @@
 
 namespace gv {
 
-// Passe 1 : mesures sur la piste deja de-plopee. Pilote les reglages de la passe 2.
+// Mesures d'une piste. Appelee deux fois : sur la prise brute de-plopee (regle le nettoyage) puis sur la voix
+// nettoyee (regle la dynamique), cf. processChain.
 struct AnalysisResult {
     float noiseDb = -120;     // RMS dBFS des 20 % de fenetres de 50 ms les plus calmes
     float voiceDb = -120;     // RMS median des fenetres de voix (> bruit + 10 dB)

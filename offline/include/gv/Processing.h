@@ -30,10 +30,12 @@ struct ProcessInfo {
     const char* denoiser = "rnnoise";
     float levelDb = 0; // correction max du nivellement multi-personnes
     float outLufs = -120, outTruePeakDb = -120;
+    AnalysisResult clean; // passe 3 : mesures sur la voix nettoyee (apres debruitage)
     std::string toJson() const;
 };
 
-// Passe 2 : HPF -> coupe-bandes (raies) -> debruitage -> expandeur -> EQ -> de-esser -> nivellement -> compresseur -> loudness -> limiteur true peak
+// Nettoyage (regle par l'analyse de la prise brute `a`) : HPF -> coupe-bandes (raies) -> debruitage -> expandeur,
+// puis passe 3 = nouvelle analyse sur la voix propre, qui regle : EQ -> de-esser -> nivellement -> compresseur -> loudness -> limiteur true peak
 // Debruiteur externe optionnel (mono 48 kHz, en place, latence deja compensee) a la place de RNNoise
 using Denoiser = std::function<void(std::vector<float>&)>;
 ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& a, const Denoiser& externalDenoise = {});

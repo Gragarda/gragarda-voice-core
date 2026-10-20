@@ -17,7 +17,8 @@ struct Report {
 };
 
 // Point d'entree unique, hors temps reel, en place :
-// plops (guides par les cuts video, secondes) -> passe 1 analyse -> passe 2 traitement.
+// plops (guides par les cuts video, secondes) -> analyse de la prise brute -> nettoyage -> analyse de la voix
+// propre -> dynamique (EQ, de-esser, nivellement, compresseur, loudness, limiteur).
 // progress(etape) optionnel : "pops", "analysis", "processing".
 Report runPipeline(AudioBuffer& b, const std::vector<double>& cutsSec, const std::string& presetJson,
                    void (*progress)(const char* stage, void* user) = nullptr, void* user = nullptr,
