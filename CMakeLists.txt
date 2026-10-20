@@ -14,6 +14,8 @@ add_library(rnnoise STATIC ${RNNOISE_SRC})
 target_include_directories(rnnoise PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise/include)
 target_compile_definitions(rnnoise PRIVATE _USE_MATH_DEFINES COMPILE_OPUS)
 
+option(GV_WITH_DFN "Lier DeepFilterNet 3 (libDF, Rust) ; OFF pour WASM" ON)
+
 # DeepFilterNet 3 (libDF, Rust, MIT/Apache) : clone de github.com/Rikorose/DeepFilterNet a cote du projet
 # principal, puis : cargo build --release -p deep_filter --no-default-features --features capi --lib
 set(DFN_DIR "${CMAKE_SOURCE_DIR}/../DeepFilterNet" CACHE PATH "Sources DeepFilterNet (libDF compilee)")
@@ -32,11 +34,26 @@ set(DFN_LIB "${DFN_LIB_DEFAULT}" CACHE FILEPATH "Bibliotheque statique libDF")
 
 add_library(gv_dsp STATIC dsp/VoiceChain.cpp dsp/Calibration.cpp)
 target_include_directories(gv_dsp PUBLIC dsp)
-target_link_libraries(gv_dsp PRIVATE rnnoise PUBLIC "${DFN_LIB}" ${DFN_SYS_LIBS})
+target_link_libraries(gv_dsp PRIVATE rnnoise)
+if(GV_WITH_DFN)
+  target_compile_definitions(gv_dsp PRIVATE GV_WITH_DFN)
+  target_link_libraries(gv_dsp PUBLIC "${DFN_LIB}" ${DFN_SYS_LIBS})
+endif()
 if(MSVC)
   target_compile_options(gv_dsp PRIVATE /W4 /fp:fast)
 else()
   target_compile_options(gv_dsp PRIVATE -Wall -Wextra)
+endif()
+
+# Pipeline hors temps reel (web / mobile) : plops, analyse, traitement fichier entier. Sans libDF.
+file(GLOB GV_OFFLINE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/offline/src/*.cpp)
+add_library(gv_offline STATIC ${GV_OFFLINE_SRC})
+target_include_directories(gv_offline PUBLIC offline/include)
+target_link_libraries(gv_offline PRIVATE rnnoise)
+if(MSVC)
+  target_compile_options(gv_offline PRIVATE /W4)
+else()
+  target_compile_options(gv_offline PRIVATE -Wall -Wextra)
 endif()
 
 # Auto-tests (ctest) : par defaut seulement quand le coeur est compile seul
@@ -49,4 +66,7 @@ if(GV_CORE_TESTS)
   add_executable(test_calibration tests/test_calibration.cpp)
   target_link_libraries(test_calibration PRIVATE gv_dsp)
   add_test(NAME test_calibration COMMAND test_calibration)
+  add_executable(test_offline tests/test_offline.cpp)
+  target_link_libraries(test_offline PRIVATE gv_offline)
+  add_test(NAME test_offline COMMAND test_offline "${CMAKE_CURRENT_SOURCE_DIR}/presets")
 endif()

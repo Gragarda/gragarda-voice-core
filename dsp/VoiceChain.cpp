@@ -5,11 +5,17 @@
 #include <fstream>
 #include "rnnoise.h"
 
+#ifdef GV_WITH_DFN
 extern "C" { // API C de libDF (DeepFilterNet, MIT/Apache)
 DFState* df_create(const char* path, float atten_lim, const char* log_level);
 float df_process_frame(DFState* st, float* input, float* output);
 void df_free(DFState* st);
 }
+#else // sans libDF (WASM, web) : mode Max indisponible, maxAvailable() = false
+static DFState* df_create(const char*, float, const char*) { return nullptr; }
+static float df_process_frame(DFState*, float*, float*) { return 0; }
+static void df_free(DFState*) {}
+#endif
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;

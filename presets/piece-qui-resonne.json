@@ -1,0 +1,10 @@
+{
+  "name": "piece-qui-resonne",
+  "label": "Pièce qui résonne",
+  "hint": "Tu as filmé dans une pièce vide qui fait écho",
+  "denoiseMin": 0.5,
+  "expanderDb": 10,
+  "peak1Hz": 300, "peak1Db": -3, "peak1Q": 1,
+  "peak2Hz": 3500, "peak2Db": 1.5, "peak2Q": 1,
+  "targetRangeDb": 7
+}
