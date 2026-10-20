@@ -166,9 +166,12 @@ int main(int argc, char** argv)
     }
 
     // 5. Pipeline complet sur chaque preset : -14 LUFS (+-0,5), <= -1 dBTP, plops comptes
-    for (const char* name : {"voix-chaude", "piece-qui-resonne", "dehors-vent", "voix-off"}) {
-        const std::string json = readFile((presetDir + "/" + name + ".json").c_str());
-        assert(!json.empty());
+    for (const char* name : {"face-camera", "voiture", "dehors", "a-plusieurs", "piece-qui-resonne"}) {
+        const std::string file = readFile((presetDir + "/" + name + ".json").c_str());
+        assert(!file.empty());
+        // RNNoise efface en partie la voix synthetique (ce n'est pas de la parole) : on teste la loudness sans lui.
+        // La 1re occurrence d'une cle gagne (parsePreset), d'ou l'ajout en tete.
+        const std::string json = "{\"denoiseMin\": 0, " + file.substr(file.find('{') + 1);
         auto b = splice(cuts, 4.5, 0.0f);
         for (float& v : b.ch[0]) v *= 0.3f; // voix trop basse
         b.ch.push_back(b.ch[0]);              // stereo
@@ -179,7 +182,7 @@ int main(int argc, char** argv)
         assert(r.pops.size() == 5);
         assert(std::fabs(r.process.outLufs + 14.0f) < 0.5f);
         assert(r.process.outTruePeakDb <= -1.0f);
-        if (!std::strcmp(name, "voix-chaude")) { std::printf("%s\n", r.toJson().c_str()); save("t5_processed.wav", b); }
+        if (!std::strcmp(name, "face-camera")) { std::printf("%s\n", r.toJson().c_str()); save("t5_processed.wav", b); }
     }
 
     // 6. Limiteur seul sur un signal tres chaud : true peak mesure <= plafond

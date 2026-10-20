@@ -1,7 +1,7 @@
 {
-  "name": "voix-chaude",
-  "label": "Voix chaude",
-  "hint": "Plus de rondeur et de présence, pour parler face caméra",
+  "name": "face-camera",
+  "label": "Face caméra",
+  "hint": "Storytime, avis, GRWM : tu parles à ton téléphone",
   "peak1Hz": 150, "peak1Db": 2, "peak1Q": 1,
   "peak2Hz": 400, "peak2Db": -2, "peak2Q": 1.2,
   "highShelfHz": 10000, "highShelfDb": 2,

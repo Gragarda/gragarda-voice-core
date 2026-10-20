@@ -13,6 +13,7 @@ struct Preset {
     float hpfHz = 80;           // passe-haut 18 dB/oct
     float denoiseMin = 0;       // dosage minimal du debruitage 0..1 (sinon selon le bruit mesure)
     float expanderDb = 0;       // attenuation max des queues de reverberation (0 = off)
+    float levelMaxDb = 10;      // nivellement multi-personnes : correction max
     float lowShelfHz = 150, lowShelfDb = 0;
     float peak1Hz = 400, peak1Db = 0, peak1Q = 1;
     float peak2Hz = 3000, peak2Db = 0, peak2Q = 1;

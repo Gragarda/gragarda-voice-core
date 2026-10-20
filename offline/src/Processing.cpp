@@ -148,7 +148,7 @@ Preset parsePreset(const std::string& j)
     Preset p;
     size_t at;
     if (findValue(j, "name", at) && j[at] == '"') p.name = j.substr(at + 1, j.find('"', at + 1) - at - 1);
-    num(j, "hpfHz", p.hpfHz); num(j, "denoiseMin", p.denoiseMin); num(j, "expanderDb", p.expanderDb);
+    num(j, "hpfHz", p.hpfHz); num(j, "denoiseMin", p.denoiseMin); num(j, "expanderDb", p.expanderDb); num(j, "levelMaxDb", p.levelMaxDb);
     num(j, "lowShelfHz", p.lowShelfHz); num(j, "lowShelfDb", p.lowShelfDb);
     num(j, "peak1Hz", p.peak1Hz); num(j, "peak1Db", p.peak1Db); num(j, "peak1Q", p.peak1Q);
     num(j, "peak2Hz", p.peak2Hz); num(j, "peak2Db", p.peak2Db); num(j, "peak2Q", p.peak2Q);
@@ -302,7 +302,7 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     deess(b, info.deessThreshDb);
 
     // 5b. Nivellement multi-personnes (lent), puis plage dynamique remesuree pour doser le compresseur
-    info.levelDb = levelSpeakers(b, a.noiseDb, 10.0f);
+    info.levelDb = levelSpeakers(b, a.noiseDb, p.levelMaxDb);
     float p10, p95;
     loudnessRange(b, p10, p95);
 

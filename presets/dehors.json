@@ -1,7 +1,7 @@
 {
-  "name": "dehors-vent",
-  "label": "Dehors / vent",
-  "hint": "Tu as filmé dehors, avec du vent ou de la circulation",
+  "name": "dehors",
+  "label": "Dehors / en marchant",
+  "hint": "Vlog dans la rue, vent, circulation, foule autour",
   "hpfHz": 120,
   "denoiseMin": 0.8,
   "lowShelfHz": 200, "lowShelfDb": -2,

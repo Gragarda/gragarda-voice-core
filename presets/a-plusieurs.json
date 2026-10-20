@@ -1,0 +1,11 @@
+{
+  "name": "a-plusieurs",
+  "label": "Micro-trottoir / à plusieurs",
+  "hint": "Interview, discussion, ou des gens loin du téléphone",
+  "hpfHz": 100,
+  "levelMaxDb": 15,
+  "lowShelfHz": 150, "lowShelfDb": -1,
+  "peak2Hz": 3000, "peak2Db": 3, "peak2Q": 0.9,
+  "highShelfHz": 9000, "highShelfDb": 1.5,
+  "targetRangeDb": 6
+}
