@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include "gv/AudioBuffer.h"
 
 namespace gv {
@@ -12,6 +13,7 @@ struct AnalysisResult {
     float truePeakDb = -120;
     float stP10 = -120, stP95 = -120, dynamicRangeDb = 0; // loudness court terme, percentiles (portes LRA)
     float sibilanceDb = -60;  // energie 5-9 kHz / energie totale sur la voix
+    std::vector<float> toneHz;  // raies stables du bruit de fond (sifflement, ventilation, secteur...)
     float decayMs = 0;        // chute de 20 dB apres les fins de mots (mediane) : resonance de la piece
     std::string toJson() const;
 };

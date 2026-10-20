@@ -5,7 +5,7 @@
 namespace gv {
 
 Report runPipeline(AudioBuffer& b, const std::vector<double>& cutsSec, const std::string& presetJson,
-                   void (*progress)(const char*, void*), void* user)
+                   void (*progress)(const char*, void*), void* user, const Denoiser& externalDenoise)
 {
     auto step = [&](const char* s) { if (progress) progress(s, user); };
     Report r;
@@ -18,7 +18,7 @@ Report runPipeline(AudioBuffer& b, const std::vector<double>& cutsSec, const std
     step("analysis");
     r.analysis = analyze(b);
     step("processing");
-    r.process = processChain(b, p, r.analysis);
+    r.process = processChain(b, p, r.analysis, externalDenoise);
     return r;
 }
 

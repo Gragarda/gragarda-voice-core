@@ -20,6 +20,7 @@ struct Report {
 // plops (guides par les cuts video, secondes) -> passe 1 analyse -> passe 2 traitement.
 // progress(etape) optionnel : "pops", "analysis", "processing".
 Report runPipeline(AudioBuffer& b, const std::vector<double>& cutsSec, const std::string& presetJson,
-                   void (*progress)(const char* stage, void* user) = nullptr, void* user = nullptr);
+                   void (*progress)(const char* stage, void* user) = nullptr, void* user = nullptr,
+                   const Denoiser& externalDenoise = {});
 
 } // namespace gv

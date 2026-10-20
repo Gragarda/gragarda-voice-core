@@ -186,7 +186,67 @@ void limitTruePeak(AudioBuffer& b, float ceiling, float lookaheadMs, float relea
     applyGain(b, req);
 }
 
-ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& a)
+// Nivellement lent multi-personnes : chaque passage de parole (fenetre 1 s autour, parole seulement) est ramene
+// vers le niveau median de la video, +-maxDb. Une personne loin du micro et une proche finissent au meme volume.
+// Les pauses gardent le gain de la parole voisine (pas de remontee du bruit dans les silences).
+static float levelSpeakers(AudioBuffer& b, float noiseDb, float maxDb)
+{
+    const size_t B = (size_t)(0.1 * b.sampleRate), n = b.frames() / B; // blocs de 100 ms
+    if (n < 20) return 0;
+    std::vector<float> lvl(n);
+    for (size_t k = 0; k < n; ++k) {
+        double e = 0;
+        for (const auto& c : b.ch)
+            for (size_t i = k * B; i < (k + 1) * B; ++i) e += (double)c[i] * c[i];
+        lvl[k] = (float)(10 * std::log10(e / (B * b.ch.size()) + 1e-12));
+    }
+    std::vector<float> sp;
+    for (float l : lvl)
+        if (l > noiseDb + 12) sp.push_back(l);
+    if (sp.size() < 10) return 0;
+    const float target = pct(sp, 0.5f);
+    // niveau local de la parole : moyenne en puissance des blocs de parole a +-5 blocs
+    std::vector<float> gDb(n, NAN);
+    for (size_t k = 0; k < n; ++k) {
+        if (lvl[k] <= noiseDb + 12) continue;
+        double e = 0;
+        int cnt = 0;
+        for (size_t i = k >= 5 ? k - 5 : 0; i < std::min(n, k + 6); ++i)
+            if (lvl[i] > noiseDb + 12) { e += std::pow(10.0, lvl[i] / 10); ++cnt; }
+        gDb[k] = std::clamp(target - (float)(10 * std::log10(e / cnt)), -maxDb, maxDb);
+    }
+    // pauses : interpolation entre les gains de parole voisins
+    size_t last = n;
+    for (size_t k = 0; k < n; ++k) {
+        if (std::isnan(gDb[k])) continue;
+        if (last == n) std::fill(gDb.begin(), gDb.begin() + k, gDb[k]);
+        else for (size_t i = last + 1; i < k; ++i) gDb[i] = gDb[last] + (gDb[k] - gDb[last]) * (i - last) / (k - last);
+        last = k;
+    }
+    if (last == n) return 0;
+    std::fill(gDb.begin() + last + 1, gDb.end(), gDb[last]);
+    // lissage (moyenne glissante 500 ms) puis interpolation lineaire par echantillon
+    std::vector<float> s(n);
+    float maxAbs = 0;
+    for (size_t k = 0; k < n; ++k) {
+        float acc = 0;
+        int cnt = 0;
+        for (size_t i = k >= 2 ? k - 2 : 0; i < std::min(n, k + 3); ++i) { acc += gDb[i]; ++cnt; }
+        s[k] = acc / cnt;
+        maxAbs = std::max(maxAbs, std::fabs(s[k]));
+    }
+    std::vector<float> g(b.frames());
+    for (size_t i = 0; i < g.size(); ++i) {
+        const float pos = (float)i / B - 0.5f; // centre des blocs
+        const size_t k = (size_t)std::clamp(pos, 0.0f, (float)(n - 1));
+        const float f = std::clamp(pos - k, 0.0f, 1.0f);
+        g[i] = dbToLin(k + 1 < n ? s[k] + (s[k + 1] - s[k]) * f : s[n - 1]);
+    }
+    applyGain(b, g);
+    return maxAbs;
+}
+
+ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& a, const Denoiser& externalDenoise)
 {
     ProcessInfo info;
     const double sr = b.sampleRate;
@@ -197,10 +257,25 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     hp.design(Biquad::HighPass, sr, p.hpfHz, 1.0);
     for (auto& c : b.ch) { highPass1(c, sr, p.hpfHz); hp.process(c); }
 
-    // 2. Debruitage : rien sous -70 dBFS de bruit (evite la "voix sous l'eau"), plein a partir de -45
-    info.denoiseWet = std::max(p.denoiseMin, std::clamp((a.noiseDb + 70.0f) / 25.0f, 0.0f, 1.0f));
-    if (sr != 48000) info.denoiseWet = 0; // ponytail: RNNoise entraine a 48 kHz ; le web extrait toujours en 48 kHz
-    if (info.denoiseWet > 0.01f) denoise(b, info.denoiseWet);
+    // 1b. Raies tonales stables : coupe-bande etroit (Q 30, ~+-12 Hz a 720 Hz), 2 passes = ~ -40 dB au centre
+    for (float f : a.toneHz) {
+        Biquad nf;
+        nf.design(Biquad::Notch, sr, f, 30.0);
+        for (auto& c : b.ch) { nf.process(c); nf.process(c); }
+    }
+
+    // 2. Debruitage. Externe (web : DeepFilterNet 3) : toujours, il separe la parole de tout le reste, y compris
+    // une respiration pres du micro pendant que d'autres parlent. Sinon RNNoise, dose selon le bruit :
+    // rien sous -70 dBFS (evite la "voix sous l'eau"), plein a partir de -45.
+    if (externalDenoise) {
+        for (auto& c : b.ch) externalDenoise(c);
+        info.denoiser = "deepfilternet";
+        info.denoiseWet = 1;
+    } else {
+        info.denoiseWet = std::max(p.denoiseMin, std::clamp((a.noiseDb + 70.0f) / 25.0f, 0.0f, 1.0f));
+        if (sr != 48000) info.denoiseWet = 0; // ponytail: RNNoise entraine a 48 kHz ; le web extrait toujours en 48 kHz
+        if (info.denoiseWet > 0.01f) denoise(b, info.denoiseWet);
+    }
 
     // 3. Expandeur (preset "piece qui resonne"), dose selon la resonance mesuree
     if (p.expanderDb > 0) {
@@ -226,8 +301,13 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     info.deessThreshDb = a.sibilanceDb + p.deessOffsetDb;
     deess(b, info.deessThreshDb);
 
-    // 6. Compresseur 3:1 : seuil place pour ramener la plage mesuree vers celle du preset
-    const float excess = std::clamp(a.dynamicRangeDb - p.targetRangeDb, 0.0f, 12.0f);
+    // 5b. Nivellement multi-personnes (lent), puis plage dynamique remesuree pour doser le compresseur
+    info.levelDb = levelSpeakers(b, a.noiseDb, 10.0f);
+    float p10, p95;
+    loudnessRange(b, p10, p95);
+
+    // 6. Compresseur 3:1 : seuil place pour ramener la plage restante vers celle du preset
+    const float excess = std::clamp(p95 - p10 - p.targetRangeDb, 0.0f, 12.0f);
     if (excess > 0) {
         const auto env = peakEnvDb(b);
         std::vector<float> voiced;
@@ -267,11 +347,11 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
 
 std::string ProcessInfo::toJson() const
 {
-    char s[384];
+    char s[448];
     std::snprintf(s, sizeof(s),
-                  "{\"denoiseWet\":%.2f,\"expanderDb\":%.1f,\"deessThreshDb\":%.1f,\"compressed\":%s,"
+                  "{\"denoiser\":\"%s\",\"denoiseWet\":%.2f,\"levelDb\":%.1f,\"expanderDb\":%.1f,\"deessThreshDb\":%.1f,\"compressed\":%s,"
                   "\"compThreshDb\":%.1f,\"gainDb\":%.2f,\"outLufs\":%.2f,\"outTruePeakDb\":%.2f}",
-                  denoiseWet, expanderDb, deessThreshDb, compressed ? "true" : "false", compThreshDb, gainDb,
+                  denoiser, denoiseWet, levelDb, expanderDb, deessThreshDb, compressed ? "true" : "false", compThreshDb, gainDb,
                   outLufs, outTruePeakDb);
     return s;
 }

@@ -30,6 +30,10 @@ void Biquad::design(Type t, double sr, double f, double q, double gainDb)
         A0 = (A + 1) + (A - 1) * cw + sA; A1 = -2 * ((A - 1) + (A + 1) * cw);
         A2 = (A + 1) + (A - 1) * cw - sA;
         break;
+    case Notch:
+        B0 = 1; B1 = -2 * cw; B2 = 1;
+        A0 = 1 + alpha; A1 = -2 * cw; A2 = 1 - alpha;
+        break;
     default: // HighShelf
         B0 = A * ((A + 1) + (A - 1) * cw + sA); B1 = -2 * A * ((A - 1) + (A + 1) * cw);
         B2 = A * ((A + 1) + (A - 1) * cw - sA);
@@ -135,6 +139,64 @@ std::vector<float> shortTermLufs(const AudioBuffer& b)
         if (j >= 29) out.push_back((float)toLufs(acc / (30.0 * segLen)));
     }
     return out;
+}
+
+std::vector<double> welch(const std::vector<float>& x, size_t n, const std::vector<size_t>& frames)
+{
+    std::vector<double> out(n / 2 + 1, 0.0);
+    const size_t nf = x.size() / n;
+    std::vector<size_t> idx = frames;
+    if (idx.empty())
+        for (size_t f = 0; f < nf; ++f) idx.push_back(f);
+    std::vector<double> re(n), im(n);
+    size_t used = 0;
+    for (size_t f : idx) {
+        if (f >= nf) continue;
+        for (size_t i = 0; i < n; ++i) {
+            re[i] = x[f * n + i] * (0.5 - 0.5 * std::cos(2 * kPi * i / n));
+            im[i] = 0;
+        }
+        // FFT radix 2 en place
+        for (size_t i = 1, j = 0; i < n; ++i) {
+            size_t bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { std::swap(re[i], re[j]); std::swap(im[i], im[j]); }
+        }
+        for (size_t len = 2; len <= n; len <<= 1) {
+            const double a = -2 * kPi / len;
+            for (size_t i = 0; i < n; i += len)
+                for (size_t k = 0; k < len / 2; ++k) {
+                    const double c = std::cos(a * k), s = std::sin(a * k);
+                    const size_t u = i + k, v = i + k + len / 2;
+                    const double tr = re[v] * c - im[v] * s, ti = re[v] * s + im[v] * c;
+                    re[v] = re[u] - tr; im[v] = im[u] - ti;
+                    re[u] += tr; im[u] += ti;
+                }
+        }
+        for (size_t k = 0; k <= n / 2; ++k) out[k] += re[k] * re[k] + im[k] * im[k];
+        ++used;
+    }
+    for (double& v : out) v /= std::max<size_t>(1, used);
+    return out;
+}
+
+void loudnessRange(const AudioBuffer& b, float& p10, float& p95)
+{
+    p10 = p95 = -120.0f;
+    const auto st = shortTermLufs(b);
+    double e = 0;
+    int cnt = 0;
+    for (float v : st)
+        if (v > -70.0f) { e += std::pow(10.0, v / 10.0); ++cnt; }
+    if (!cnt) return;
+    const double gate = 10.0 * std::log10(e / cnt) - 20.0;
+    std::vector<float> g;
+    for (float v : st)
+        if (v > -70.0f && v > gate) g.push_back(v);
+    std::sort(g.begin(), g.end());
+    p10 = g[(size_t)(0.10 * (g.size() - 1) + 0.5)];
+    p95 = g[(size_t)(0.95 * (g.size() - 1) + 0.5)];
 }
 
 std::vector<float> truePeakEnvelope(const AudioBuffer& b)

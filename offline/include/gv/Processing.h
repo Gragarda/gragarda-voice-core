@@ -1,5 +1,7 @@
 #pragma once
+#include <functional>
 #include <string>
+#include <vector>
 #include "gv/Analysis.h"
 #include "gv/AudioBuffer.h"
 
@@ -24,12 +26,16 @@ Preset parsePreset(const std::string& json);
 struct ProcessInfo {
     float denoiseWet = 0, expanderDb = 0, deessThreshDb = 0, compThreshDb = 0, gainDb = 0;
     bool compressed = false;
+    const char* denoiser = "rnnoise";
+    float levelDb = 0; // correction max du nivellement multi-personnes
     float outLufs = -120, outTruePeakDb = -120;
     std::string toJson() const;
 };
 
-// Passe 2 : HPF -> debruitage -> expandeur -> EQ -> de-esser -> compresseur -> loudness -> limiteur true peak
-ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& a);
+// Passe 2 : HPF -> coupe-bandes (raies) -> debruitage -> expandeur -> EQ -> de-esser -> nivellement -> compresseur -> loudness -> limiteur true peak
+// Debruiteur externe optionnel (mono 48 kHz, en place, latence deja compensee) a la place de RNNoise
+using Denoiser = std::function<void(std::vector<float>&)>;
+ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& a, const Denoiser& externalDenoise = {});
 
 // Limiteur hors temps reel : anticipation, crete suréchantillonnee x4 <= ceiling (lineaire)
 void limitTruePeak(AudioBuffer& b, float ceiling, float lookaheadMs = 5, float releaseMs = 80);

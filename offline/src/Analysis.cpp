@@ -67,20 +67,8 @@ AnalysisResult analyze(const AudioBuffer& b)
     r.truePeakDb = linToDb(truePeak(b));
 
     // Plage dynamique : percentiles 10/95 de la loudness court terme, portes absolue -70 et relative -20
-    const auto st = shortTermLufs(b);
-    double e = 0;
-    int cnt = 0;
-    for (float v : st)
-        if (v > -70.0f) { e += std::pow(10.0, v / 10.0); ++cnt; }
-    if (cnt) {
-        const float gate = db(e / cnt) - 20.0f;
-        std::vector<float> g;
-        for (float v : st)
-            if (v > -70.0f && v > gate) g.push_back(v);
-        r.stP10 = pct(g, 0.10f);
-        r.stP95 = pct(g, 0.95f);
-        r.dynamicRangeDb = r.stP95 - r.stP10;
-    }
+    loudnessRange(b, r.stP10, r.stP95);
+    r.dynamicRangeDb = r.stP95 - r.stP10;
 
     // Sibilance : bande 5-9 kHz sur les fenetres de voix
     if (sr > 20000) {
@@ -93,6 +81,31 @@ AnalysisResult analyze(const AudioBuffer& b)
         for (size_t i = 0; i < pb.size() && i < p50.size(); ++i)
             if (isVoice[i]) { sb += pb[i]; sf += p50[i]; }
         if (sf > 0) r.sibilanceDb = db(sb / sf);
+    }
+
+    // Raies tonales stables : spectre moyen (resolution ~6 Hz) des 20 % de fenetres de 170 ms les plus calmes,
+    // pic > 15 dB au-dessus de la mediane locale (+-30 Hz), entre 60 Hz et 8 kHz. 5 raies max, les plus fortes.
+    {
+        const size_t N = 8192;
+        const auto pw = power(m, N);
+        std::vector<size_t> order(pw.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t x, size_t y) { return pw[x] < pw[y]; });
+        order.resize(std::max<size_t>(1, order.size() / 5));
+        const auto S = welch(m, N, order);
+        const double hz = sr / N;
+        std::vector<std::pair<float, float>> peaks; // (proeminence dB, Hz)
+        const size_t w = (size_t)(30 / hz);
+        for (size_t k = (size_t)(60 / hz); k < std::min(S.size() - w, (size_t)(8000 / hz)); ++k) {
+            if (S[k] < S[k - 1] || S[k] < S[k + 1]) continue;
+            std::vector<float> nb;
+            for (size_t i = k - w; i <= k + w; ++i)
+                if (i + 2 < k || i > k + 2) nb.push_back((float)S[i]);
+            const float prom = db(S[k] / (pct(nb, 0.5f) + 1e-20));
+            if (prom > 15) peaks.push_back({prom, (float)(k * hz)});
+        }
+        std::sort(peaks.rbegin(), peaks.rend());
+        for (size_t i = 0; i < peaks.size() && r.toneHz.size() < 5; ++i) r.toneHz.push_back(peaks[i].second);
     }
 
     // Resonance : temps pour perdre 20 dB apres une fin de mot (enveloppe 10 ms)
@@ -112,11 +125,14 @@ AnalysisResult analyze(const AudioBuffer& b)
 
 std::string AnalysisResult::toJson() const
 {
+    std::string tones = "[";
+    for (size_t i = 0; i < toneHz.size(); ++i) tones += (i ? "," : "") + std::to_string((int)std::lround(toneHz[i]));
+    tones += "]";
     char s[512];
     std::snprintf(s, sizeof(s),
                   "{\"noiseDb\":%.1f,\"voiceDb\":%.1f,\"lufs\":%.2f,\"truePeakDb\":%.2f,\"stP10\":%.1f,"
-                  "\"stP95\":%.1f,\"dynamicRangeDb\":%.1f,\"sibilanceDb\":%.1f,\"decayMs\":%.0f}",
-                  noiseDb, voiceDb, lufs, truePeakDb, stP10, stP95, dynamicRangeDb, sibilanceDb, decayMs);
+                  "\"stP95\":%.1f,\"dynamicRangeDb\":%.1f,\"sibilanceDb\":%.1f,\"decayMs\":%.0f,\"toneHz\":%s}",
+                  noiseDb, voiceDb, lufs, truePeakDb, stP10, stP95, dynamicRangeDb, sibilanceDb, decayMs, tones.c_str());
     return s;
 }
 
