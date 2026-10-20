@@ -110,7 +110,7 @@ void repairPops(AudioBuffer& b, const std::vector<Pop>& pops)
     const size_t w40 = ms(b, 40), dcLen = ms(b, 15), half = ms(b, 0.5), xfHalf = ms(b, 4), fade = ms(b, 5), hist = ms(b, 20);
     for (const Pop& pop : pops) {
         const size_t p = pop.pos;
-        if (p < margin || p + margin > n) continue; // ponytail: plop colle au debut/fin du fichier ignore
+        if (p < margin || p + margin > n) continue; // le detecteur ignore deja les 50 ms des bords
         const float ref = localJumpRef(b, p);
         if (pop.type == PopType::Silence) {
             for (auto& c : b.ch) fadeGap(c, p, fade);

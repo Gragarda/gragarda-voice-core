@@ -13,7 +13,7 @@ constexpr float kRefFloor = 1e-4f;    // evite x8 sur du bruit numerique en plei
 // Forme d'un raccord (cf. spliceShape). Mesures : raccords synthetiques pic/apres >= 20, apres/avant <= 2,4 ;
 // attaques reelles en plein silence (freesound) pic/apres <= 24 mais apres/avant >= 3,1, ou pic/apres <= 18.
 // ponytail: marges faibles, a recalibrer sur de vrais montages TikTok (tools/cut-calibration)
-constexpr float kScanIsolation = 19.0f, kCutIsolation = 10.0f, kRise = 3.0f;
+constexpr float kScanIsolation = 19.0f, kCutIsolation = 8.0f, kRise = 3.0f;
 
 size_t ms(const AudioBuffer& b, double v) { return (size_t)std::lround(v * 0.001 * b.sampleRate); }
 
@@ -93,6 +93,9 @@ bool spliceShape(const AudioBuffer& b, size_t p, float peak, float isolation, fl
 // Type de plop a p, sachant si le saut d'echantillon depasse le seuil
 bool classify(const AudioBuffer& b, size_t p, bool click, bool allowDcOnly, Pop& out)
 {
+    // bords du fichier : debut/fin abrupts (padding AAC...) ne sont pas des raccords, et la reparation n'y a pas la place
+    if (p < ms(b, 50) || p + ms(b, 50) > b.frames())
+        return false;
     const float dc = dcStepAt(b, p);
     const bool isDc = dc > kDcStep;
     if (!click && !(isDc && allowDcOnly))
@@ -141,18 +144,30 @@ std::vector<Pop> detectPops(const AudioBuffer& b, const std::vector<double>& cut
     for (double t : cutsSec) {
         const size_t c = (size_t)std::max(0.0, t * b.sampleRate);
         if (c >= n) continue;
-        size_t p = 0;
-        float best = -1;
-        for (size_t i = c > win ? c - win : 2; i < std::min(n, c + win); ++i) {
-            const float j = jumpAt(b, i);
-            if (j > best) { best = j; p = i; }
-        }
-        p = refine(b, p);
-        const float ref = localJumpRef(b, p);
+        // Le plus grand saut de la fenetre est souvent une consonne voisine : on essaie les 5 plus grands
+        // (espaces d'au moins 1 ms), le premier qui a la forme d'un raccord gagne.
+        std::vector<std::pair<float, size_t>> cand;
+        for (size_t i = c > win ? c - win : 2; i < std::min(n, c + win); ++i) cand.emplace_back(jumpAt(b, i), i);
+        std::sort(cand.begin(), cand.end(), std::greater<>());
+        std::vector<size_t> tried;
         Pop pop;
         pop.origin = PopOrigin::Cut;
-        pop.severity = best / ref;
-        if (!taken(p) && classify(b, p, best > kCutFactor * ref && spliceShape(b, p, best, kCutIsolation, kRise), true, pop))
+        bool click = false;
+        size_t p = cand.empty() ? c : refine(b, cand[0].second);
+        for (const auto& [j, i] : cand) {
+            if (tried.size() == 5) break;
+            if (std::any_of(tried.begin(), tried.end(), [&](size_t q) { return (i > q ? i - q : q - i) < ms(b, 1); })) continue;
+            tried.push_back(i);
+            const size_t q = refine(b, i);
+            const float ref = localJumpRef(b, q);
+            if (j > kCutFactor * ref && spliceShape(b, q, j, kCutIsolation, 1e9f)) {
+                p = q;
+                click = true;
+                pop.severity = j / ref;
+                break;
+            }
+        }
+        if (!taken(p) && classify(b, p, click, true, pop))
             pops.push_back(pop);
     }
 
