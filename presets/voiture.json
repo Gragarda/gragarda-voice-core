@@ -1,7 +1,5 @@
 {
   "name": "voiture",
-  "label": "En voiture",
-  "hint": "Tu parles au volant ou côté passager, avec le bruit de la route",
   "hpfHz": 90,
   "denoiseMin": 0.8,
   "lowShelfHz": 200, "lowShelfDb": -2,

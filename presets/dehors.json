@@ -1,7 +1,5 @@
 {
   "name": "dehors",
-  "label": "Dehors / en marchant",
-  "hint": "Vlog dans la rue, vent, circulation, foule autour",
   "hpfHz": 120,
   "denoiseMin": 0.8,
   "lowShelfHz": 200, "lowShelfDb": -2,

@@ -1,7 +1,5 @@
 {
   "name": "piece-qui-resonne",
-  "label": "Pièce qui résonne",
-  "hint": "Cuisine, salle de bain, pièce vide : ça fait écho",
   "denoiseMin": 0.5,
   "expanderDb": 10,
   "peak1Hz": 300, "peak1Db": -3, "peak1Q": 1,
