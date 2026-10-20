@@ -42,6 +42,7 @@ AnalysisResult analyze(const AudioBuffer& b)
     if (b.frames() < (size_t)b.sampleRate) return r; // < 1 s : rien de fiable
     const double sr = b.sampleRate;
     auto m = mono(b);
+    highPass1(m, sr, 20.0); // un offset DC n'est pas du bruit
 
     // Bruit de fond et niveau de voix (fenetres de 50 ms)
     // ponytail: niveau seul, pas de spectre du bruit (RNNoise n'en a pas besoin) ; l'ajouter pour un debruiteur spectral

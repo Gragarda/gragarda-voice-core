@@ -10,6 +10,10 @@ constexpr float kCutFactor = 8.0f, kScanFactor = 20.0f;
 constexpr float kDcStep = 0.02f;      // ~ -34 dBFS
 constexpr float kSilenceRms = 0.003f; // ~ -50 dBFS
 constexpr float kRefFloor = 1e-4f;    // evite x8 sur du bruit numerique en plein silence
+// Forme d'un raccord (cf. spliceShape). Mesures : raccords synthetiques pic/apres >= 20, apres/avant <= 2,4 ;
+// attaques reelles en plein silence (freesound) pic/apres <= 24 mais apres/avant >= 3,1, ou pic/apres <= 18.
+// ponytail: marges faibles, a recalibrer sur de vrais montages TikTok (tools/cut-calibration)
+constexpr float kScanIsolation = 19.0f, kCutIsolation = 10.0f, kRise = 3.0f;
 
 size_t ms(const AudioBuffer& b, double v) { return (size_t)std::lround(v * 0.001 * b.sampleRate); }
 
@@ -65,6 +69,25 @@ float rmsAround(const AudioBuffer& b, size_t p)
 size_t refine(const AudioBuffer& b, size_t p)
 {
     return p > 2 && jumpAt(b, p - 1) > 0.5f * jumpAt(b, p) ? p - 1 : p;
+}
+
+// Mediane de j sur [a, e)
+float medianJump(const AudioBuffer& b, size_t a, size_t e)
+{
+    std::vector<float> v;
+    for (size_t i = a; i < e && i < b.frames(); ++i) v.push_back(jumpAt(b, i));
+    return median(v);
+}
+
+// Un raccord sans fondu = saut sur 2 echantillons, puis la forme d'onde redevient lisse. Une attaque
+// d'explosive ou de fricative (meme en plein silence) garde j bien au-dessus du fond juste apres : pas un plop.
+// Test : pic >= isolation x fond juste apres (1 ms), et fond apres < rise x fond avant (1..10 ms).
+bool spliceShape(const AudioBuffer& b, size_t p, float peak, float isolation, float rise)
+{
+    const size_t m1 = ms(b, 1), m10 = ms(b, 10);
+    const float after = medianJump(b, p + 2, p + 2 + m1);
+    const float before = std::max(kRefFloor, medianJump(b, p > m10 ? p - m10 : 2, p > m1 ? p - m1 : 2));
+    return peak >= isolation * after && after < rise * before;
 }
 
 // Type de plop a p, sachant si le saut d'echantillon depasse le seuil
@@ -129,11 +152,11 @@ std::vector<Pop> detectPops(const AudioBuffer& b, const std::vector<double>& cut
         Pop pop;
         pop.origin = PopOrigin::Cut;
         pop.severity = best / ref;
-        if (!taken(p) && classify(b, p, best > kCutFactor * ref, true, pop))
+        if (!taken(p) && classify(b, p, best > kCutFactor * ref && spliceShape(b, p, best, kCutIsolation, kRise), true, pop))
             pops.push_back(pop);
     }
 
-    // 2. Scan du fichier par blocs de 10 ms, seuil x20 de la plus grande mediane (bloc, voisins) :
+    // Scan du fichier par blocs de 10 ms, seuil x20 de la plus grande mediane (bloc, voisins) :
     // une consonne explosive releve la mediane de son propre bloc, un saut d'un echantillon non.
     const size_t blk = ms(b, 10), nb = n / blk;
     std::vector<float> med(nb), peak(nb), tmp(blk);
@@ -149,10 +172,12 @@ std::vector<Pop> detectPops(const AudioBuffer& b, const std::vector<double>& cut
     for (size_t k = 0; k < nb; ++k) {
         const float ref = std::max({kRefFloor, med[k], k ? med[k - 1] : 0.0f, k + 1 < nb ? med[k + 1] : 0.0f});
         if (peak[k] <= kScanFactor * ref || taken(arg[k])) continue;
+        const size_t p = refine(b, arg[k]);
+        if (!spliceShape(b, p, peak[k], kScanIsolation, kRise)) continue;
         Pop pop;
         pop.origin = PopOrigin::Scan;
         pop.severity = peak[k] / ref;
-        if (classify(b, refine(b, arg[k]), true, false, pop))
+        if (classify(b, p, true, false, pop))
             pops.push_back(pop);
     }
     std::sort(pops.begin(), pops.end(), [](const Pop& a, const Pop& c) { return a.pos < c.pos; });
