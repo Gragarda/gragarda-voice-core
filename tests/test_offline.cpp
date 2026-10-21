@@ -194,6 +194,24 @@ int main(int argc, char** argv)
         std::printf("limiteur : %.2f dBTP\n", linToDb(truePeak(b)));
         assert(linToDb(truePeak(b)) <= -1.0f);
     }
+    // 7. De-reverb : voix seche -> hors service ; piece RT60 0.8 s (4 peignes) -> detectee et appliquee
+    {
+        std::vector<float> dry(48000 * 10);
+        for (size_t i = 0; i < dry.size(); ++i) dry[i] = voiceAt(i, 0.1f);
+        std::vector<float> wet(dry.size(), 0.f);
+        for (size_t D : {1499, 1777, 2053, 2311}) { // ponytail: reverb de Schroeder minimale (peignes paralleles)
+            const float g = std::pow(10.f, -3.f * D / (48000.f * 0.8f));
+            std::vector<float> y(dry.size());
+            for (size_t i = 0; i < y.size(); ++i) y[i] = dry[i] + (i >= D ? g * y[i - D] : 0.f);
+            for (size_t i = 0; i < y.size(); ++i) wet[i] += 0.25f * y[i];
+        }
+        const std::string json = "{\"denoiseMin\": 0}";
+        auto bd = mono(dry), bw = mono(wet);
+        const Report rd = runPipeline(bd, {}, json), rw = runPipeline(bw, {}, json);
+        std::printf("de-reverb : sec %.2f s (%d), piece %.2f s (%d)\n", rd.process.rt60, rd.process.dereverb,
+                    rw.process.rt60, rw.process.dereverb);
+        assert(!rd.process.dereverb && rw.process.dereverb);
+    }
     std::printf("OK\n");
     return 0;
 }

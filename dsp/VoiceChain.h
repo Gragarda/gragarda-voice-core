@@ -3,10 +3,10 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include "Dereverb.h"
 
 struct DenoiseState;
 struct DFState;
-struct kiss_fft_state;
 
 // Coeur DSP independant d'OBS.
 // trim -> HPF -> debruitage (RNNoise ou DeepFilterNet 3) -> de-reverb -> EQ soustractif -> compresseur -> de-esser
@@ -87,17 +87,8 @@ private:
     int dnPos_ = 0, dnHistIdx_ = 0;
     void denoiseFrame(int nc);
 
-    // De-reverb : STFT 960 (hop 480, fenetre racine de Hann), soustraction spectrale de la reverberation
-    // tardive (Lebart 2001). Retard fixe d'une trame, actif ou non.
-    static constexpr int kDrBins = kDnFrame + 1, kDrHist = 5; // 5 trames = 50 ms : debut de la queue tardive
-    struct FftFree { void operator()(kiss_fft_state* s) const; };
-    std::unique_ptr<kiss_fft_state, FftFree> fft_;
-    float drWin_[2 * kDnFrame] = {};
-    float drPrev_[kMaxChannels][kDnFrame] = {}, drOla_[kMaxChannels][kDnFrame] = {};
-    std::vector<float> drPow_; // [kMaxChannels][kDrHist][kDrBins] puissance lissee des trames passees, alloue dans prepare
-    int drIdx_ = 0;
-    float drDecay_ = 0; // attenuation de la queue apres kDrHist trames ; 0 = hors service
-    void dereverbFrame(int nc);
+    // De-reverb apres le debruitage : retard fixe d'une trame, actif ou non
+    Dereverb dr_[kMaxChannels];
 
     // Filtres : HPF + EQ (meme coefficients pour tous les canaux, etat par canal)
     Biquad hpf_, eq_[kNumEq], dsSplit_, dsDetect_, corr_[3];

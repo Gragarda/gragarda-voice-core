@@ -1,5 +1,5 @@
 #include "Calibration.h"
-#include "VoiceChain.h" // Biquad
+#include "VoiceChain.h" // Biquad, Dereverb
 #include <algorithm>
 #include <cmath>
 
@@ -29,8 +29,6 @@ constexpr float kCorrStrength = 0.75f, kCorrMaxDb = 6.0f; // on corrige 75 % de 
 // Niveau d'entree vise apres Gain. -20 poussait la voix 12 dB dans le compresseur (trop compresse a l'ecoute) ;
 // -30 = niveau auquel le son de reference a ete valide (gain 0, micros a -30..-39 LUFS) ; le leveler fait le reste.
 constexpr float kTargetInputLufs = -30.0f;
-// De-reverb active au-dela de 0.3 s estime (l'estimation sous-evalue : piece a 0.8 s mesuree ~0.45 s) ; 0.6 s = tres reverberant
-constexpr float kRt60On = 0.3f, kRt60Red = 0.6f;
 
 std::vector<float> filt(const std::vector<float>& x, const Biquad& b1, const Biquad* b2 = nullptr)
 {
@@ -73,26 +71,6 @@ float percentile(std::vector<float> v, float p)
 
 int macro(float v) { return (int)std::lround(std::clamp(v, 0.0f, 100.0f)); }
 
-// RT60 aveugle : une piece ne s'eteint pas plus vite que son RT60, la parole si. Les chutes d'energie les plus
-// rapides (fenetres de 80 ms) donnent donc la decroissance de la piece ; sur voix seche elles sont bien plus raides.
-// ponytail: heuristique (pas le modele de Lollmann) ; percentile et fenetres a recaler sur de vraies pieces
-float estimateRt60(const std::vector<float>& x, double sr, float floorDb)
-{
-    constexpr size_t W = 8; // 8 blocs de 10 ms
-    const size_t b10 = (size_t)(0.01 * sr);
-    const auto ms = blockMs(x, b10, b10);
-    std::vector<float> e;
-    for (size_t i = 2; i < ms.size(); ++i) e.push_back(db((ms[i] + ms[i - 1] + ms[i - 2]) / 3)); // lisse sur 30 ms
-    std::vector<float> rts;
-    for (size_t i = 0; i + W <= e.size(); ++i) {
-        if (e[i + W - 1] < floorDb + 10.0f || e[i] - e[i + W - 1] < 3.0f) continue; // au-dessus du bruit, qui chute
-        double num = 0, den = 0, me = 0;
-        for (size_t k = 0; k < W; ++k) me += e[i + k] / W;
-        for (size_t k = 0; k < W; ++k) { num += (k - (W - 1) / 2.0) * (e[i + k] - me); den += (k - (W - 1) / 2.0) * (k - (W - 1) / 2.0); }
-        rts.push_back((float)(-60.0 / (num / den / 0.01)));
-    }
-    return rts.size() < 20 ? 0.0f : percentile(rts, 0.1f);
-}
 } // namespace
 
 CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std::vector<float>& speech,

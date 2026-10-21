@@ -4,7 +4,6 @@
 #include <cstring>
 #include <fstream>
 #include "rnnoise.h"
-#include "kiss_fft.h"
 
 #ifdef GV_WITH_DFN
 extern "C" { // API C de libDF (DeepFilterNet, MIT/Apache)
@@ -140,13 +139,7 @@ void VoiceChain::prepare(double sampleRate, int numChannels, const char* dfnMode
     std::memset(dnOut_, 0, sizeof(dnOut_));
     std::memset(dnHist_, 0, sizeof(dnHist_));
     dnPos_ = dnHistIdx_ = 0;
-    if (!fft_) fft_.reset(opus_fft_alloc(2 * kDnFrame, nullptr, nullptr, 0));
-    for (int k = 0; k < 2 * kDnFrame; ++k) // racine de Hann periodique : analyse x synthese = Hann, somme 1 a 50 %
-        drWin_[k] = (float)std::sin(kPi * k / (2 * kDnFrame));
-    std::memset(drPrev_, 0, sizeof(drPrev_));
-    std::memset(drOla_, 0, sizeof(drOla_));
-    drPow_.assign((size_t)kMaxChannels * kDrHist * kDrBins, 0.0f);
-    drIdx_ = 0;
+    for (auto& d : dr_) d.prepare();
 
     // DeepFilterNet : libDF fait abort() si le modele manque -> on verifie avant.
     // ponytail: RNNoise et DFN supposent 48 kHz ; a d'autres frequences ils tournent quand meme, mal
@@ -161,7 +154,6 @@ void VoiceChain::prepare(double sampleRate, int numChannels, const char* dfnMode
 
 void VoiceChain::DnFree::operator()(DenoiseState* s) const { rnnoise_destroy(s); }
 void VoiceChain::DfFree::operator()(DFState* s) const { df_free(s); }
-void VoiceChain::FftFree::operator()(kiss_fft_state* s) const { opus_fft_free(s, 0); }
 
 void VoiceChain::denoiseFrame(int nc)
 {
@@ -190,48 +182,7 @@ void VoiceChain::denoiseFrame(int nc)
                 dnOut_[c][k] = dnWet_ * dnOut_[c][k] + (1.0f - dnWet_) * dry[k];
         }
     }
-    dereverbFrame(nc);
-}
-
-// Reverberation tardive estimee = puissance d'il y a 50 ms, attenuee selon le RT60 ; on la retire du spectre.
-// Entree dnOut_ (trame t), sortie dnOut_ (trame t-1, reconstruite par recouvrement-addition).
-void VoiceChain::dereverbFrame(int nc)
-{
-    constexpr int N = 2 * kDnFrame;
-    constexpr float kFloor = 0.0625f, kSmooth = 0.5f; // gain mini -12 dB (evite les artefacts "musicaux")
-    const int old = drIdx_; // trame la plus ancienne = t - kDrHist, remplacee ensuite par t
-    drIdx_ = (drIdx_ + 1) % kDrHist;
-    for (int c = 0; c < nc; ++c) {
-        if (drDecay_ <= 0.0f) { // hors service : simple retard d'une trame
-            float tmp[kDnFrame];
-            std::memcpy(tmp, dnOut_[c], sizeof(tmp));
-            std::memcpy(dnOut_[c], drPrev_[c], sizeof(tmp));
-            std::memcpy(drPrev_[c], tmp, sizeof(tmp));
-            continue;
-        }
-        kiss_fft_cpx in[N], X[N];
-        for (int k = 0; k < N; ++k) {
-            in[k].r = drWin_[k] * (k < kDnFrame ? drPrev_[c][k] : dnOut_[c][k - kDnFrame]);
-            in[k].i = 0.0f;
-        }
-        std::memcpy(drPrev_[c], dnOut_[c], sizeof(drPrev_[c]));
-        opus_fft(fft_.get(), in, X, 0);
-        float* pOld = &drPow_[((size_t)c * kDrHist + old) * kDrBins];
-        const float* pPrev = &drPow_[((size_t)c * kDrHist + (old + kDrHist - 1) % kDrHist) * kDrBins];
-        for (int b = 0; b < kDrBins; ++b) {
-            const float p = X[b].r * X[b].r + X[b].i * X[b].i;
-            const float late = drDecay_ * pOld[b];
-            const float g = std::sqrt(std::max(kFloor, 1.0f - late / (p + 1e-12f)));
-            pOld[b] = p + kSmooth * (pPrev[b] - p);
-            X[b].r *= g; X[b].i *= g;
-            if (b > 0 && b < kDnFrame) X[N - b] = {X[b].r, -X[b].i}; // symetrie hermitienne
-        }
-        opus_ifft(fft_.get(), X, in, 0);
-        for (int k = 0; k < kDnFrame; ++k) {
-            dnOut_[c][k] = drOla_[c][k] + drWin_[k] * in[k].r;
-            drOla_[c][k] = drWin_[k + kDnFrame] * in[k + kDnFrame].r;
-        }
-    }
+    for (int c = 0; c < nc; ++c) dr_[c].process(dnOut_[c]);
 }
 
 // Macros -> parametres. 0.5 partout = reference (HPF 80 Hz, boue -2.5, carton -1.5, chaleur +1.5,
@@ -260,9 +211,7 @@ void VoiceChain::applyMacros(const Macros& m)
     corr_[0].design(Biquad::LowShelf, sr, 150.0, 0.7, m.corrLow);
     corr_[1].design(Biquad::Peak, sr, 4000.0, 0.7, m.corrPresence);
     corr_[2].design(Biquad::HighShelf, sr, 7000.0, 0.7, m.corrAir);
-    // De-reverb : queue en -60 dB / RT60 ; apres 50 ms elle vaut 10^(-6 * 0.05 / RT60) en puissance
-    // ponytail: bascule on/off sans fondu (clic possible) ; reglage pose par la calibration, pas en direct
-    drDecay_ = m.rt60 > 0.05f ? std::pow(10.0f, -6.0f * 0.001f * kDrHist * 10.0f / m.rt60) : 0.0f;
+    for (auto& d : dr_) d.setRt60(m.rt60);
 }
 
 void VoiceChain::setGainDb(float db)

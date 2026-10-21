@@ -6,6 +6,7 @@
 #include <cstring>
 #include <deque>
 #include "gv/Dsp.h"
+#include "Dereverb.h"
 #include "rnnoise.h"
 
 namespace gv {
@@ -79,23 +80,24 @@ std::vector<float> maxAbs(const AudioBuffer& b)
     return m;
 }
 
-// Expandeur vers le bas : attenue ce qui passe sous voix - 15 dB (queues de reverberation)
-void expand(AudioBuffer& b, float thrDb, float rangeDb)
+// De-reverb (dsp/Dereverb) sur tout le fichier, retard d'une trame compense
+void dereverb(AudioBuffer& b, float rt60)
 {
-    const double sr = b.sampleRate;
-    const float att = coefMs(2, sr), rel = coefMs(30, sr), gAtt = coefMs(1, sr), gRel = coefMs(40, sr);
-    std::vector<float> g(b.frames());
-    float e = 0, gDb = 0;
-    const auto m = maxAbs(b);
-    for (size_t i = 0; i < g.size(); ++i) {
-        const float p = m[i] * m[i];
-        e = p + (p > e ? att : rel) * (e - p);
-        const float lvl = 10.0f * std::log10(e + 1e-14f) - 3.0f; // ~RMS d'une crete
-        const float want = -std::min(rangeDb, std::max(0.0f, thrDb - lvl));
-        gDb = want + (want < gDb ? gAtt : gRel) * (gDb - want);
-        g[i] = dbToLin(gDb);
+    const size_t n = b.frames(), F = Dereverb::kFrame;
+    std::vector<float> fr(F);
+    for (auto& c : b.ch) {
+        Dereverb d;
+        d.prepare();
+        d.setRt60(rt60);
+        std::vector<float> y(n);
+        for (size_t f = 0; f * F < n + F; ++f) {
+            for (size_t k = 0; k < F; ++k) fr[k] = f * F + k < n ? c[f * F + k] : 0.0f;
+            d.process(fr.data());
+            for (size_t k = 0; f > 0 && k < F; ++k)
+                if ((f - 1) * F + k < n) y[(f - 1) * F + k] = fr[k];
+        }
+        c.swap(y);
     }
-    applyGain(b, g);
 }
 
 void deess(AudioBuffer& b, float thrDb)
@@ -148,7 +150,7 @@ Preset parsePreset(const std::string& j)
     Preset p;
     size_t at;
     if (findValue(j, "name", at) && j[at] == '"') p.name = j.substr(at + 1, j.find('"', at + 1) - at - 1);
-    num(j, "hpfHz", p.hpfHz); num(j, "denoiseMin", p.denoiseMin); num(j, "expanderDb", p.expanderDb); num(j, "levelMaxDb", p.levelMaxDb);
+    num(j, "hpfHz", p.hpfHz); num(j, "denoiseMin", p.denoiseMin); num(j, "levelMaxDb", p.levelMaxDb);
     num(j, "lowShelfHz", p.lowShelfHz); num(j, "lowShelfDb", p.lowShelfDb);
     num(j, "peak1Hz", p.peak1Hz); num(j, "peak1Db", p.peak1Db); num(j, "peak1Q", p.peak1Q);
     num(j, "peak2Hz", p.peak2Hz); num(j, "peak2Db", p.peak2Db); num(j, "peak2Q", p.peak2Q);
@@ -278,10 +280,18 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         if (info.denoiseWet > 0.01f) denoise(b, info.denoiseWet);
     }
 
-    // 3. Expandeur (preset "piece qui resonne"), dose selon la resonance mesuree
-    if (p.expanderDb > 0) {
-        info.expanderDb = p.expanderDb * std::clamp(a.decayMs / 250.0f, 0.3f, 1.0f);
-        expand(b, a.voiceDb - 15.0f, info.expanderDb);
+    // 3. De-reverb : RT60 mesure sur la voix debruitee (le bruit masquerait les queues), mono passe-haut 200 Hz
+    // (le grondement grave n'est pas de la reverb). Fond = celui de la prise brute : prudent, il est plus haut.
+    {
+        std::vector<float> m(b.frames(), 0.0f);
+        for (const auto& c : b.ch)
+            for (size_t i = 0; i < m.size(); ++i) m[i] += c[i] / b.channels();
+        Biquad hp200;
+        hp200.design(Biquad::HighPass, sr, 200.0, 0.7071);
+        hp200.process(m);
+        info.rt60 = estimateRt60(m, sr, a.noiseDb);
+        info.dereverb = info.rt60 > kRt60On;
+        if (info.dereverb) dereverb(b, std::min(info.rt60, 1.5f));
     }
 
     // Passe 3 : la voix est propre, on la remesure. Tout ce qui suit (de-esser, nivellement, compresseur,
@@ -359,9 +369,9 @@ std::string ProcessInfo::toJson() const
 {
     char s[512];
     std::snprintf(s, sizeof(s),
-                  "{\"denoiser\":\"%s\",\"denoiseWet\":%.2f,\"levelDb\":%.1f,\"expanderDb\":%.1f,\"deessThreshDb\":%.1f,\"compressed\":%s,"
+                  "{\"denoiser\":\"%s\",\"denoiseWet\":%.2f,\"levelDb\":%.1f,\"rt60\":%.2f,\"dereverb\":%s,\"deessThreshDb\":%.1f,\"compressed\":%s,"
                   "\"compThreshDb\":%.1f,\"gainDb\":%.2f,\"outLufs\":%.2f,\"outTruePeakDb\":%.2f}",
-                  denoiser, denoiseWet, levelDb, expanderDb, deessThreshDb, compressed ? "true" : "false", compThreshDb, gainDb,
+                  denoiser, denoiseWet, levelDb, rt60, dereverb ? "true" : "false", deessThreshDb, compressed ? "true" : "false", compThreshDb, gainDb,
                   outLufs, outTruePeakDb);
     return std::string(s, s + std::strlen(s) - 1) + ",\"clean\":" + clean.toJson() + "}";
 }
