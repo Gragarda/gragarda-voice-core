@@ -36,12 +36,15 @@ struct CalibrationReport {
     float lowDb = 0, presenceDb = 0, sibilanceDb = 0; // ecarts au profil moyen de voix, dB
     float sibPeakDb = 0;                              // pics de sifflantes au-dessus de la moyenne, dB
     float spreadDb = 0;                               // dynamique : ecart p95-p10 du court terme
+    float rt60 = 0;                                   // reverberation estimee (aveugle), s ; 0 = non mesurable
     // Voyants
     Light noise = Light::Green, level = Light::Green, sibilance = Light::Green, clipping = Light::Green;
+    Light reverb = Light::Green;
     // Reglages recommandes
     float gainDb = 0;
     int clean = 50, warmth = 50, clarity = 50, punch = 50;
     float corrLow = 0, corrPresence = 0, corrAir = 0; // correction du micro, dB
+    float dereverbRt60 = 0;                           // -> Macros::rt60 ; 0 = de-reverb hors service
     bool valid = false; // false : pas assez de parole detectee
 };
 

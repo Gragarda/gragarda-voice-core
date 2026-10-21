@@ -3,9 +3,9 @@
 Host-independent voice processing chain used by [Gragarda Voice](https://github.com/Gragarda/gragarda-voice) (OBS filter)
 and [Gragarda Voice VST](https://github.com/Gragarda/gragarda-voice-vst) (VST3 plugin).
 
-Chain: input trim → high-pass → denoise (RNNoise or DeepFilterNet 3) → subtractive EQ → compressor → de-esser →
+Chain: input trim → high-pass → denoise (RNNoise or DeepFilterNet 3) → de-reverb → subtractive EQ → compressor → de-esser →
 additive EQ → leveler (short-term LUFS target) → look-ahead limiter. Driven by 4 macros (Clean, Warmth, Clarity, Punch).
-Plus `Calibration`: analyzes 5 s of silence + 15 s of speech and suggests macros / mic correction.
+Plus `Calibration`: analyzes 5 s of silence + 15 s of speech and suggests macros / mic correction, and estimates the room RT60 to switch the de-reverb on (`Macros::rt60`).
 
 Constraints: planar float audio, any block size, no allocation or lock in `process()`, fixed latency
 (`VoiceChain::latencySamples()`). Denoisers are trained at 48 kHz.

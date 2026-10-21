@@ -33,7 +33,7 @@ endif()
 set(DFN_LIB "${DFN_LIB_DEFAULT}" CACHE FILEPATH "Bibliotheque statique libDF")
 
 add_library(gv_dsp STATIC dsp/VoiceChain.cpp dsp/Calibration.cpp)
-target_include_directories(gv_dsp PUBLIC dsp)
+target_include_directories(gv_dsp PUBLIC dsp PRIVATE third_party/rnnoise/src) # kiss_fft de RNNoise (de-reverb)
 target_link_libraries(gv_dsp PRIVATE rnnoise)
 if(GV_WITH_DFN)
   target_compile_definitions(gv_dsp PRIVATE GV_WITH_DFN)

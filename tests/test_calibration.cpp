@@ -85,6 +85,23 @@ int main()
     assert(dark.warmth <= bright.warmth);
     assert(clean.clean >= 50); // jamais moins de debruitage que la reference
 
+    // Reverberation : voix seche -> de-reverb hors service ; piece RT60 0.8 s (4 peignes) -> detectee, activee
+    {
+        auto dry = voice(0.1f, 15, 0.0003f);
+        std::vector<float> wet(dry.size(), 0.f);
+        for (size_t D : {1499, 1777, 2053, 2311}) { // ponytail: reverb de Schroeder minimale (peignes paralleles)
+            const float g = std::pow(10.f, -3.f * D / (48000.f * 0.8f));
+            std::vector<float> y(dry.size());
+            for (size_t i = 0; i < y.size(); ++i) y[i] = dry[i] + (i >= D ? g * y[i - D] : 0.f);
+            for (size_t i = 0; i < y.size(); ++i) wet[i] += 0.25f * y[i];
+        }
+        auto room = analyzeCalibration(hiss(0.0003f, 5), wet, 48000);
+        std::printf("RT60 : sec %.2f s, piece %.2f s\n", clean.rt60, room.rt60);
+        assert(clean.dereverbRt60 == 0 && clean.reverb == Light::Green);
+        assert(room.dereverbRt60 > 0 && room.reverb != Light::Green);
+        assert(room.rt60 > 0.3f && room.rt60 < 1.2f && clean.rt60 < 0.25f); // sous-evalue, mais bien separe
+    }
+
     // Capture : downmix stereo, s'arrete a la taille demandee
     {
         Capture c; c.prepare(1000);

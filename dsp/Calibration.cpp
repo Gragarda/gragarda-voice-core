@@ -29,6 +29,8 @@ constexpr float kCorrStrength = 0.75f, kCorrMaxDb = 6.0f; // on corrige 75 % de 
 // Niveau d'entree vise apres Gain. -20 poussait la voix 12 dB dans le compresseur (trop compresse a l'ecoute) ;
 // -30 = niveau auquel le son de reference a ete valide (gain 0, micros a -30..-39 LUFS) ; le leveler fait le reste.
 constexpr float kTargetInputLufs = -30.0f;
+// De-reverb active au-dela de 0.3 s estime (l'estimation sous-evalue : piece a 0.8 s mesuree ~0.45 s) ; 0.6 s = tres reverberant
+constexpr float kRt60On = 0.3f, kRt60Red = 0.6f;
 
 std::vector<float> filt(const std::vector<float>& x, const Biquad& b1, const Biquad* b2 = nullptr)
 {
@@ -70,6 +72,27 @@ float percentile(std::vector<float> v, float p)
 }
 
 int macro(float v) { return (int)std::lround(std::clamp(v, 0.0f, 100.0f)); }
+
+// RT60 aveugle : une piece ne s'eteint pas plus vite que son RT60, la parole si. Les chutes d'energie les plus
+// rapides (fenetres de 80 ms) donnent donc la decroissance de la piece ; sur voix seche elles sont bien plus raides.
+// ponytail: heuristique (pas le modele de Lollmann) ; percentile et fenetres a recaler sur de vraies pieces
+float estimateRt60(const std::vector<float>& x, double sr, float floorDb)
+{
+    constexpr size_t W = 8; // 8 blocs de 10 ms
+    const size_t b10 = (size_t)(0.01 * sr);
+    const auto ms = blockMs(x, b10, b10);
+    std::vector<float> e;
+    for (size_t i = 2; i < ms.size(); ++i) e.push_back(db((ms[i] + ms[i - 1] + ms[i - 2]) / 3)); // lisse sur 30 ms
+    std::vector<float> rts;
+    for (size_t i = 0; i + W <= e.size(); ++i) {
+        if (e[i + W - 1] < floorDb + 10.0f || e[i] - e[i + W - 1] < 3.0f) continue; // au-dessus du bruit, qui chute
+        double num = 0, den = 0, me = 0;
+        for (size_t k = 0; k < W; ++k) me += e[i + k] / W;
+        for (size_t k = 0; k < W; ++k) { num += (k - (W - 1) / 2.0) * (e[i + k] - me); den += (k - (W - 1) / 2.0) * (k - (W - 1) / 2.0); }
+        rts.push_back((float)(-60.0 / (num / den / 0.01)));
+    }
+    return rts.size() < 20 ? 0.0f : percentile(rts, 0.1f);
+}
 } // namespace
 
 CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std::vector<float>& speech,
@@ -140,6 +163,12 @@ CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std:
         r.sibPeakDb = percentile(d, 0.98f);
     }
 
+    // Reverberation : estimee sur le signal passe-haut (le grondement grave n'est pas de la reverb)
+    {
+        Biquad hp; hp.design(Biquad::HighPass, sr, 200.0, 0.7071, 0);
+        r.rt60 = estimateRt60(filt(speech, hp), sr, r.noiseLufs + 0.691f);
+    }
+
     // Voyants
     r.noise = r.snrDb >= 35 ? Light::Green : r.snrDb >= 25 ? Light::Orange : Light::Red;
     r.level = (r.speechLufs >= -35 && r.speechLufs <= -12) ? Light::Green
@@ -147,6 +176,7 @@ CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std:
     r.clipping = (r.clipPct > 0.05f || r.peakDb > -0.1f) ? Light::Red : r.peakDb > -3.0f ? Light::Orange : Light::Green;
     const float sibExcess = std::max(r.sibilanceDb, r.sibPeakDb - 14.0f);
     r.sibilance = sibExcess > 8 ? Light::Red : sibExcess > 4 ? Light::Orange : Light::Green;
+    r.reverb = r.rt60 > kRt60Red ? Light::Red : r.rt60 > kRt60On ? Light::Orange : Light::Green;
 
     // Reglages : on reste pres de 50 (reference validee), ecarts bornes
     r.gainDb = std::clamp(kTargetInputLufs - r.speechLufs, -24.0f, 24.0f);
@@ -161,6 +191,7 @@ CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std:
     r.corrLow = corr(r.lowDb);
     r.corrPresence = corr(r.presenceDb);
     r.corrAir = corr(r.sibilanceDb);
+    r.dereverbRt60 = r.rt60 > kRt60On ? std::min(r.rt60, 1.5f) : 0.0f;
     r.valid = true;
     return r;
 }
