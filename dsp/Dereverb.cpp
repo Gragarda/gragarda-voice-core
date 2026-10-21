@@ -77,7 +77,8 @@ float estimateRt60(const std::vector<float>& x, double sr, float floorDb)
         double num = 0, den = 0, me = 0;
         for (size_t k = 0; k < W; ++k) me += e[i + k] / W;
         for (size_t k = 0; k < W; ++k) { num += (k - (W - 1) / 2.0) * (e[i + k] - me); den += (k - (W - 1) / 2.0) * (k - (W - 1) / 2.0); }
-        rts.push_back((float)(-60.0 / (num / den / 0.01)));
+        const double slope = num / den / 0.01; // dB/s ; bords qui chutent mais pente globale montante : ignores
+        if (slope < 0) rts.push_back((float)(-60.0 / slope));
     }
     if (rts.size() < 20) return 0.0f;
     const size_t k = rts.size() / 10; // percentile 10 %

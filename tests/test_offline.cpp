@@ -211,6 +211,13 @@ int main(int argc, char** argv)
         std::printf("de-reverb : sec %.2f s (%d), piece %.2f s (%d)\n", rd.process.rt60, rd.process.dereverb,
                     rw.process.rt60, rw.process.dereverb);
         assert(!rd.process.dereverb && rw.process.dereverb);
+        // rafales avec queue tres faible : jamais de RT60 negatif (0 = non mesurable)
+        std::vector<float> burst(48000 * 6);
+        for (size_t i = 0; i < burst.size(); ++i)
+            burst[i] = (i % 24000 < 9000 ? voiceAt(i, 0.1f) : 0.f) + 1e-4f * (float)std::sin(i * 0.37);
+        auto bb = mono(burst);
+        const Report rb = runPipeline(bb, {}, json);
+        assert(rb.process.rt60 >= 0);
     }
     std::printf("OK\n");
     return 0;
