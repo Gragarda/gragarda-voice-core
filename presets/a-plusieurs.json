@@ -1,0 +1,9 @@
+{
+  "name": "a-plusieurs",
+  "hpfHz": 100,
+  "levelMaxDb": 15,
+  "lowShelfHz": 150, "lowShelfDb": -1,
+  "peak2Hz": 3000, "peak2Db": 3, "peak2Q": 0.9,
+  "highShelfHz": 9000, "highShelfDb": 1.5,
+  "targetRangeDb": 6
+}

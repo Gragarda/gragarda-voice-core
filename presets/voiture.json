@@ -1,0 +1,10 @@
+{
+  "name": "voiture",
+  "hpfHz": 90,
+  "denoiseMin": 0.8,
+  "lowShelfHz": 200, "lowShelfDb": -2,
+  "peak1Hz": 300, "peak1Db": -2, "peak1Q": 1.2,
+  "peak2Hz": 3500, "peak2Db": 2.5, "peak2Q": 1,
+  "highShelfHz": 10000, "highShelfDb": 1,
+  "targetRangeDb": 7
+}

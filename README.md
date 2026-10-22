@@ -20,6 +20,17 @@ add_subdirectory(core)
 target_link_libraries(my-plugin PRIVATE gv_dsp)   # ${DFN_MODEL} = DeepFilterNet model to ship
 ```
 
+## Offline pipeline (web / mobile)
+
+`gv_offline` (`offline/`, `presets/*.json`) processes a whole file instead of a live stream:
+edit-click ("plop") detection and repair guided by video cut timestamps, analysis (noise, BS.1770 loudness,
+true peak, dynamic range, sibilance, room decay), then high-pass → RNNoise → expander → EQ → de-esser →
+compressor → -14 LUFS → true-peak limiter (-1 dBTP). Entry point: `gv::runPipeline` (`offline/include/gv/Pipeline.h`).
+Used by [gragarda-voice-web](https://github.com/Gragarda/gragarda-voice-web) through WebAssembly.
+
+`-DGV_WITH_DFN=OFF` builds without DeepFilterNet (no Rust toolchain needed; required for WebAssembly).
+In that mode the Max engine is unavailable and `VoiceChain::maxAvailable()` returns false.
+
 ## Build and test alone
 
 DeepFilterNet (libDF) must be built next to the top-level project:
