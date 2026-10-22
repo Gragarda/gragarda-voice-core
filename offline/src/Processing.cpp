@@ -156,7 +156,7 @@ Preset parsePreset(const std::string& j)
     num(j, "peak2Hz", p.peak2Hz); num(j, "peak2Db", p.peak2Db); num(j, "peak2Q", p.peak2Q);
     num(j, "highShelfHz", p.highShelfHz); num(j, "highShelfDb", p.highShelfDb);
     num(j, "deessOffsetDb", p.deessOffsetDb); num(j, "targetRangeDb", p.targetRangeDb);
-    num(j, "targetLufs", p.targetLufs); num(j, "ceilingDbtp", p.ceilingDbtp);
+    num(j, "targetLufs", p.targetLufs); num(j, "ceilingDbtp", p.ceilingDbtp); num(j, "dereverbRt60", p.dereverbRt60);
     auto flag = [&](const char* k, bool& v) { float f = v ? 1.0f : 0.0f; num(j, k, f); v = f != 0.0f; };
     flag("pops", p.use.pops); flag("hpf", p.use.hpf); flag("notch", p.use.notch); flag("denoise", p.use.denoise);
     flag("dereverb", p.use.dereverb); flag("eq", p.use.eq); flag("deesser", p.use.deesser); flag("leveler", p.use.leveler);
@@ -296,9 +296,9 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         hp200.design(Biquad::HighPass, sr, 200.0, 0.7071);
         hp200.process(m);
         info.rt60 = estimateRt60(m, sr, a.noiseDb);
-        info.dereverb = info.rt60 > kRt60On;
+        info.dereverb = info.rt60 > kRt60On || p.dereverbRt60 > 0;
         info.dereverb = info.dereverb && p.use.dereverb;
-        if (info.dereverb) dereverb(b, std::min(info.rt60, 1.5f));
+        if (info.dereverb) dereverb(b, p.dereverbRt60 > 0 ? p.dereverbRt60 : std::min(info.rt60, 1.5f));
     }
 
     // Passe 3 : la voix est propre, on la remesure. Tout ce qui suit (de-esser, nivellement, compresseur,

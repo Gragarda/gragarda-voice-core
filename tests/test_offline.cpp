@@ -211,6 +211,9 @@ int main(int argc, char** argv)
         std::printf("de-reverb : sec %.2f s (%d), piece %.2f s (%d)\n", rd.process.rt60, rd.process.dereverb,
                     rw.process.rt60, rw.process.dereverb);
         assert(!rd.process.dereverb && rw.process.dereverb);
+        // force a la main : applique meme sur voix seche
+        auto bf = mono(dry);
+        assert(runPipeline(bf, {}, "{\"denoiseMin\": 0, \"dereverbRt60\": 0.7}").process.dereverb);
         // rafales avec queue tres faible : jamais de RT60 negatif (0 = non mesurable)
         std::vector<float> burst(48000 * 6);
         for (size_t i = 0; i < burst.size(); ++i)
