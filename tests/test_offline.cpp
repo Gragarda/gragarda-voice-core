@@ -219,6 +219,15 @@ int main(int argc, char** argv)
         const Report rb = runPipeline(bb, {}, json);
         assert(rb.process.rt60 >= 0);
     }
+    // 8. Options avancees : tout coupe = fichier rendu a l'identique
+    {
+        auto b = splice(cuts, 4.5, 0.0f);
+        const auto ref = b.ch[0];
+        const std::string json = "{\"pops\":0,\"hpf\":0,\"notch\":0,\"denoise\":0,\"dereverb\":0,\"eq\":0,\"deesser\":0,"
+                                 "\"leveler\":0,\"compressor\":0,\"loudness\":0,\"limiter\":0}";
+        runPipeline(b, cuts, json);
+        assert(b.ch[0] == ref);
+    }
     std::printf("OK\n");
     return 0;
 }

@@ -13,7 +13,7 @@ Report runPipeline(AudioBuffer& b, const std::vector<double>& cutsSec, const std
     const Preset p = parsePreset(presetJson);
     r.preset = p.name;
     step("pops");
-    r.pops = detectPops(b, cutsSec);
+    if (p.use.pops) r.pops = detectPops(b, cutsSec);
     repairPops(b, r.pops); // AVANT toute dynamique
     step("analysis");
     r.analysis = analyze(b);

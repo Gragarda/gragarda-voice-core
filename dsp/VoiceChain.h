@@ -36,6 +36,11 @@ public:
         // De-reverb (pose par la calibration) : RT60 estime de la piece en secondes, 0 = hors service
         float rt60 = 0;
     };
+    // Options avancees : chaque etage peut etre coupe. La latence ne change pas (etage coupe = traverse tel quel).
+    // Le debruitage reste sur setDenoise().
+    struct Stages {
+        bool hpf = true, dereverb = true, eq = true, compressor = true, deesser = true, leveler = true, limiter = true;
+    };
     static float targetLufs(Destination d) { return d == Podcast ? -16.0f : d == VoiceOver ? -18.0f : -14.0f; }
 
     // Alloue et charge les modeles : hors thread audio. dfnModel = chemin du .tar.gz DeepFilterNet
@@ -51,6 +56,8 @@ public:
     // Thread UI : applique au debut du prochain bloc audio.
     // ponytail: pending_ copie sans verrou, un bloc peut voir un melange ancien/nouveau ; sans consequence audible
     void setMacros(const Macros& m) { pending_ = m; dirty_ = true; }
+    // Thread UI, meme mecanisme que setMacros. eq = EQ soustractif + additif + correction du micro.
+    void setStages(const Stages& s) { stages_ = s; dirty_ = true; }
 
     // Audio planaire : channels[c][i], float -1..1. Taille de bloc quelconque.
     void process(float* const* channels, int numChannels, size_t numFrames);
@@ -71,6 +78,7 @@ private:
     bool denoise_ = true;
     Engine engine_ = Fast;
     Macros pending_;
+    Stages stages_;
     std::atomic<bool> dirty_{true};
     void applyMacros(const Macros& m);
     float dnWet_ = 1.0f; // Nettoyage < 0.5 : on remelange du signal non debruite
