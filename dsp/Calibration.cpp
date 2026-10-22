@@ -1,5 +1,5 @@
 #include "Calibration.h"
-#include "VoiceChain.h" // Biquad
+#include "VoiceChain.h" // Biquad, Dereverb
 #include <algorithm>
 #include <cmath>
 
@@ -70,6 +70,7 @@ float percentile(std::vector<float> v, float p)
 }
 
 int macro(float v) { return (int)std::lround(std::clamp(v, 0.0f, 100.0f)); }
+
 } // namespace
 
 CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std::vector<float>& speech,
@@ -140,6 +141,12 @@ CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std:
         r.sibPeakDb = percentile(d, 0.98f);
     }
 
+    // Reverberation : estimee sur le signal passe-haut (le grondement grave n'est pas de la reverb)
+    {
+        Biquad hp; hp.design(Biquad::HighPass, sr, 200.0, 0.7071, 0);
+        r.rt60 = estimateRt60(filt(speech, hp), sr, r.noiseLufs + 0.691f);
+    }
+
     // Voyants
     r.noise = r.snrDb >= 35 ? Light::Green : r.snrDb >= 25 ? Light::Orange : Light::Red;
     r.level = (r.speechLufs >= -35 && r.speechLufs <= -12) ? Light::Green
@@ -147,6 +154,7 @@ CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std:
     r.clipping = (r.clipPct > 0.05f || r.peakDb > -0.1f) ? Light::Red : r.peakDb > -3.0f ? Light::Orange : Light::Green;
     const float sibExcess = std::max(r.sibilanceDb, r.sibPeakDb - 14.0f);
     r.sibilance = sibExcess > 8 ? Light::Red : sibExcess > 4 ? Light::Orange : Light::Green;
+    r.reverb = r.rt60 > kRt60Red ? Light::Red : r.rt60 > kRt60On ? Light::Orange : Light::Green;
 
     // Reglages : on reste pres de 50 (reference validee), ecarts bornes
     r.gainDb = std::clamp(kTargetInputLufs - r.speechLufs, -24.0f, 24.0f);
@@ -161,6 +169,7 @@ CalibrationReport analyzeCalibration(const std::vector<float>& noise, const std:
     r.corrLow = corr(r.lowDb);
     r.corrPresence = corr(r.presenceDb);
     r.corrAir = corr(r.sibilanceDb);
+    r.dereverbRt60 = r.rt60 > kRt60On ? std::min(r.rt60, 1.5f) : 0.0f;
     r.valid = true;
     return r;
 }

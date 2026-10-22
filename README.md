@@ -3,9 +3,9 @@
 Host-independent voice processing chain used by [Gragarda Voice](https://github.com/Gragarda/gragarda-voice) (OBS filter)
 and [Gragarda Voice VST](https://github.com/Gragarda/gragarda-voice-vst) (VST3 plugin).
 
-Chain: input trim → high-pass → denoise (RNNoise or DeepFilterNet 3) → subtractive EQ → compressor → de-esser →
+Chain: input trim → high-pass → denoise (RNNoise or DeepFilterNet 3) → de-reverb → subtractive EQ → compressor → de-esser →
 additive EQ → leveler (short-term LUFS target) → look-ahead limiter. Driven by 4 macros (Clean, Warmth, Clarity, Punch).
-Plus `Calibration`: analyzes 5 s of silence + 15 s of speech and suggests macros / mic correction.
+Plus `Calibration`: analyzes 5 s of silence + 15 s of speech and suggests macros / mic correction, and estimates the room RT60 to switch the de-reverb on (`Macros::rt60`).
 
 Constraints: planar float audio, any block size, no allocation or lock in `process()`, fixed latency
 (`VoiceChain::latencySamples()`). Denoisers are trained at 48 kHz.
@@ -24,7 +24,7 @@ target_link_libraries(my-plugin PRIVATE gv_dsp)   # ${DFN_MODEL} = DeepFilterNet
 
 `gv_offline` (`offline/`, `presets/*.json`) processes a whole file instead of a live stream:
 edit-click ("plop") detection and repair guided by video cut timestamps, analysis (noise, BS.1770 loudness,
-true peak, dynamic range, sibilance, room decay), then high-pass → RNNoise → expander → EQ → de-esser →
+true peak, dynamic range, sibilance, room decay), then high-pass → RNNoise → de-reverb (auto, RT60 estimated on the denoised voice) → EQ → de-esser →
 compressor → -14 LUFS → true-peak limiter (-1 dBTP). Entry point: `gv::runPipeline` (`offline/include/gv/Pipeline.h`).
 Used by [gragarda-voice-web](https://github.com/Gragarda/gragarda-voice-web) through WebAssembly.
 

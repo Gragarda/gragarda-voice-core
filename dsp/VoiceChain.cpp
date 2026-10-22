@@ -139,6 +139,7 @@ void VoiceChain::prepare(double sampleRate, int numChannels, const char* dfnMode
     std::memset(dnOut_, 0, sizeof(dnOut_));
     std::memset(dnHist_, 0, sizeof(dnHist_));
     dnPos_ = dnHistIdx_ = 0;
+    for (auto& d : dr_) d.prepare();
 
     // DeepFilterNet : libDF fait abort() si le modele manque -> on verifie avant.
     // ponytail: RNNoise et DFN supposent 48 kHz ; a d'autres frequences ils tournent quand meme, mal
@@ -181,6 +182,7 @@ void VoiceChain::denoiseFrame(int nc)
                 dnOut_[c][k] = dnWet_ * dnOut_[c][k] + (1.0f - dnWet_) * dry[k];
         }
     }
+    for (int c = 0; c < nc; ++c) dr_[c].process(dnOut_[c]);
 }
 
 // Macros -> parametres. 0.5 partout = reference (HPF 80 Hz, boue -2.5, carton -1.5, chaleur +1.5,
@@ -209,6 +211,7 @@ void VoiceChain::applyMacros(const Macros& m)
     corr_[0].design(Biquad::LowShelf, sr, 150.0, 0.7, m.corrLow);
     corr_[1].design(Biquad::Peak, sr, 4000.0, 0.7, m.corrPresence);
     corr_[2].design(Biquad::HighShelf, sr, 7000.0, 0.7, m.corrAir);
+    for (auto& d : dr_) d.setRt60(m.rt60);
 }
 
 void VoiceChain::setGainDb(float db)

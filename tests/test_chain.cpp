@@ -50,10 +50,10 @@ int main(int argc, char** argv)
     if (argc > 1) gModel = argv[1];
     std::setvbuf(stdout, nullptr, _IONBF, 0); // voir les mesures meme si un assert tombe
 
-    // Latence fixe : debruitage 2x480 + limiteur 72 = 21.5 ms, identique debruitage on/off
+    // Latence fixe : debruitage 2x480 + de-reverb 480 + limiteur 72 = 31.5 ms, identique debruitage on/off
     VoiceChain vc;
     vc.prepare(48000, 2);
-    assert(vc.latencySamples() == 1032);
+    assert(vc.latencySamples() == 1512);
 
     // Silence reste silence
     {
@@ -154,11 +154,11 @@ int main(int argc, char** argv)
         assert(k >= 100 + (size_t)v.latencySamples() && k <= 103 + (size_t)v.latencySamples()); // filtres = quelques echantillons d'etalement
     }
 
-    // Qualite max (DeepFilterNet) : latence 4x480 + 72 = 41.5 ms ; vraie voix-like ressort exactement a cette latence
+    // Qualite max (DeepFilterNet) : latence 5x480 + 72 = 51.5 ms ; vraie voix-like ressort exactement a cette latence
     if (gModel) {
         VoiceChain v; v.prepare(48000, 1, gModel); v.setEngine(VoiceChain::Max);
         assert(v.maxAvailable());
-        assert(v.latencySamples() == 1992);
+        assert(v.latencySamples() == 2472);
         const size_t M = 48000 * 3;
         std::vector<float> x(M), y;
         unsigned s = 3;
@@ -172,9 +172,9 @@ int main(int argc, char** argv)
         y = x;
         float* p[1] = {y.data()}; v.process(p, 1, M);
         int best = 0; double bc = -2;
-        for (int d = 1900; d < 2100; ++d) {
+        for (int d = 2380; d < 2580; ++d) {
             double c = 0, ex = 0, ey = 0;
-            for (size_t i = 48000; i + 2100 < M; ++i) { c += x[i] * y[i + d]; ex += x[i] * x[i]; ey += y[i + d] * y[i + d]; }
+            for (size_t i = 48000; i + 2580 < M; ++i) { c += x[i] * y[i + d]; ex += x[i] * x[i]; ey += y[i + d] * y[i + d]; }
             c /= std::sqrt(ex * ey);
             if (c > bc) { bc = c; best = d; }
         }
@@ -206,6 +206,43 @@ int main(int argc, char** argv)
         size_t k = 0;
         for (size_t i = 0; i < x.size(); ++i) if (std::fabs(x[i]) > std::fabs(x[k])) k = i;
         assert(k >= 100 + (size_t)v.latencySamples() && k <= 103 + (size_t)v.latencySamples());
+    }
+
+    // De-reverb : meme retard actif ou non ; queue de reverb (peigne RT60 0.8 s) nettement reduite apres les syllabes
+    {
+        VoiceChain::Macros m; m.rt60 = 0.8f;
+        VoiceChain v; v.prepare(48000, 1); v.setMacros(m);
+        std::vector<float> x(4000, 0.f); x[100] = 0.5f;
+        float* p[1] = {x.data()}; v.process(p, 1, x.size());
+        size_t k = 0;
+        for (size_t i = 0; i < x.size(); ++i) if (std::fabs(x[i]) > std::fabs(x[k])) k = i;
+        assert(k >= 100 + (size_t)v.latencySamples() && k <= 103 + (size_t)v.latencySamples());
+
+        const size_t M = 48000 * 4, D = 2399; // syllabes de 0.15 s toutes les 0.5 s, puis reverb
+        std::vector<float> dryv(M, 0.f), wet(M);
+        auto src = voice(0.05f, M);
+        for (size_t i = 0; i < M; ++i) if (i % 24000 < 7200) dryv[i] = src[i] * 2.f;
+        const float g = std::pow(10.f, -3.f * D / (48000.f * 0.8f));
+        for (size_t i = 0; i < M; ++i) wet[i] = dryv[i] + (i >= D ? g * wet[i - D] : 0.f);
+        auto a = wet, b = wet;
+        VoiceChain on, off; on.prepare(48000, 1); off.prepare(48000, 1);
+        on.setMacros(m); on.setDenoise(false); off.setDenoise(false);
+        float* pa[1] = {a.data()}; on.process(pa, 1, M);
+        float* pb[1] = {b.data()}; off.process(pb, 1, M);
+        // rapport queue (100..400 ms apres la syllabe) / syllabe, sur les 2 dernieres secondes
+        auto ratio = [&](const std::vector<float>& y) {
+            double es = 0, et = 0;
+            const size_t L = (size_t)v.latencySamples();
+            for (size_t i = M / 2; i + L < M; ++i) {
+                const size_t ph = i % 24000;
+                if (ph < 7200) es += y[i + L] * y[i + L];
+                else if (ph > 12000 && ph < 21600) et += y[i + L] * y[i + L];
+            }
+            return 10 * std::log10(et / es);
+        };
+        const double rOn = ratio(a), rOff = ratio(b);
+        std::printf("de-reverb : queue/syllabe %.1f dB -> %.1f dB\n", rOff, rOn);
+        assert(rOn < rOff - 4);
     }
 
     // Macros a 50 partout = reglages par defaut (reference validee a l'ecoute)

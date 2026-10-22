@@ -3,12 +3,13 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include "Dereverb.h"
 
 struct DenoiseState;
 struct DFState;
 
 // Coeur DSP independant d'OBS.
-// trim -> HPF -> debruitage (RNNoise ou DeepFilterNet 3) -> EQ soustractif -> compresseur -> de-esser
+// trim -> HPF -> debruitage (RNNoise ou DeepFilterNet 3) -> de-reverb -> EQ soustractif -> compresseur -> de-esser
 // -> EQ additif -> leveler (AGC lent, cible LUFS selon destination) -> limiteur.
 // Reglages pilotes par 4 macros 0..1 ; 0.5 partout = reglages de reference valides a l'ecoute.
 
@@ -32,6 +33,8 @@ public:
         Destination dest = Stream;
         // Correction du micro (posee par la calibration, invisible) : ramene le micro vers une voix neutre, dB
         float corrLow = 0, corrPresence = 0, corrAir = 0;
+        // De-reverb (pose par la calibration) : RT60 estime de la piece en secondes, 0 = hors service
+        float rt60 = 0;
     };
     static float targetLufs(Destination d) { return d == Podcast ? -16.0f : d == VoiceOver ? -18.0f : -14.0f; }
 
@@ -53,9 +56,9 @@ public:
     void process(float* const* channels, int numChannels, size_t numFrames);
 
     // Latence FIXE en echantillons (a afficher pour compenser la camera)
-    // FIFO 1 trame + retard interne du moteur (RNNoise 1 trame, DeepFilterNet 3 trames) + limiteur
+    // FIFO 1 trame + retard interne du moteur (RNNoise 1 trame, DeepFilterNet 3 trames) + de-reverb 1 trame + limiteur
     int latencySamples() const { return latencySamples(engine_); }
-    int latencySamples(Engine e) const { return (1 + (e == Max ? 3 : 1)) * kDnFrame + lookahead_; }
+    int latencySamples(Engine e) const { return (2 + (e == Max ? 3 : 1)) * kDnFrame + lookahead_; }
     double sampleRate() const { return sampleRate_; }
 
 private:
@@ -84,6 +87,9 @@ private:
     int dnPos_ = 0, dnHistIdx_ = 0;
     void denoiseFrame(int nc);
 
+    // De-reverb apres le debruitage : retard fixe d'une trame, actif ou non
+    Dereverb dr_[kMaxChannels];
+
     // Filtres : HPF + EQ (meme coefficients pour tous les canaux, etat par canal)
     Biquad hpf_, eq_[kNumEq], dsSplit_, dsDetect_, corr_[3];
     float hpfZ_[kMaxChannels][2] = {}, eqZ_[kNumEq][kMaxChannels][2] = {}, corrZ_[3][kMaxChannels][2] = {};
@@ -100,7 +106,7 @@ private:
     float lvMom_ = 0, lvShort_ = 0, lvMomC_ = 0, lvShortC_ = 0;
     float lvGainDb_ = 0, lvTarget_ = -14.0f, lvStep_ = 0;
     // Avant/Apres : signal brut retarde + gain d'egalisation de volume
-    static constexpr int kDryLen = 4096; // > latence max (1992)
+    static constexpr int kDryLen = 4096; // > latence max (2472)
     std::vector<float> dry_; // [kMaxChannels][kDryLen], alloue dans prepare
     int dryPos_ = 0;
     float abWet_ = 0, abDry_ = 0, abGain_ = 1.0f, abC_ = 0, abSmooth_ = 0;
