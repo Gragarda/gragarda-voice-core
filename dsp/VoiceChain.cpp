@@ -182,7 +182,7 @@ void VoiceChain::denoiseFrame(int nc)
                 dnOut_[c][k] = dnWet_ * dnOut_[c][k] + (1.0f - dnWet_) * dry[k];
         }
     }
-    for (int c = 0; c < nc; ++c) dr_[c].process(dnOut_[c]);
+    for (int c = 0; drActive_ && c < nc; ++c) dr_[c].process(dnOut_[c]);
 }
 
 // Macros -> parametres. 0.5 partout = reference (HPF 80 Hz, boue -2.5, carton -1.5, chaleur +1.5,
@@ -211,7 +211,13 @@ void VoiceChain::applyMacros(const Macros& m)
     corr_[0].design(Biquad::LowShelf, sr, 150.0, 0.7, m.corrLow);
     corr_[1].design(Biquad::Peak, sr, 4000.0, 0.7, m.corrPresence);
     corr_[2].design(Biquad::HighShelf, sr, 7000.0, 0.7, m.corrAir);
-    for (auto& d : dr_) d.setRt60(stages_.dereverb ? m.rt60 : 0.0f);
+    const bool dr = stages_.dereverb && m.rt60 > 0.05f;
+    for (auto& d : dr_) {
+        if (dr && !drActive_) d.prepare(); // repart d'un etat propre ; pas d'allocation (tailles inchangees)
+        d.setRt60(dr ? m.rt60 : 0.0f);
+    }
+    // ponytail: la latence saute de 10 ms sans fondu (petit trou ou doublon audible) ; reglage rare, pas en direct
+    drActive_ = dr;
 }
 
 void VoiceChain::setGainDb(float db)
@@ -311,7 +317,7 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
         limGain_ = target < limGain_ ? target : target + limRel_ * (limGain_ - target);
 
         // Avant/Apres : brut aligne sur la latence, volume egalise sur 3 s quand on parle
-        const int dryRead = (dryPos_ - latencySamples() + kDryLen) % kDryLen;
+        const int dryRead = (dryPos_ - latencyFor(engine_, drActive_) + kDryLen) % kDryLen;
         float wetE = 0.0f, dryE = 0.0f;
         const int dpos = pos_ % L;
         for (int c = 0; c < nc; ++c) {

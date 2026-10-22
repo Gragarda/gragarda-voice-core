@@ -36,7 +36,7 @@ public:
         // De-reverb (pose par la calibration) : RT60 estime de la piece en secondes, 0 = hors service
         float rt60 = 0;
     };
-    // Options avancees : chaque etage peut etre coupe. La latence ne change pas (etage coupe = traverse tel quel).
+    // Options avancees : chaque etage peut etre coupe (traverse tel quel). Seul le de-reverb coupe rend sa trame de latence.
     // Le debruitage reste sur setDenoise().
     struct Stages {
         bool hpf = true, dereverb = true, eq = true, compressor = true, deesser = true, leveler = true, limiter = true;
@@ -62,10 +62,12 @@ public:
     // Audio planaire : channels[c][i], float -1..1. Taille de bloc quelconque.
     void process(float* const* channels, int numChannels, size_t numFrames);
 
-    // Latence FIXE en echantillons (a afficher pour compenser la camera)
+    // Latence en echantillons (a afficher pour compenser la camera)
     // FIFO 1 trame + retard interne du moteur (RNNoise 1 trame, DeepFilterNet 3 trames) + de-reverb 1 trame + limiteur
+    // + 1 trame de de-reverb seulement s'il tourne (etage actif et RT60 pose) : la latence change avec lui,
+    // comme avec le moteur. Valeur cote UI (reglages demandes), appliquee au debut du bloc audio suivant.
     int latencySamples() const { return latencySamples(engine_); }
-    int latencySamples(Engine e) const { return (2 + (e == Max ? 3 : 1)) * kDnFrame + lookahead_; }
+    int latencySamples(Engine e) const { return latencyFor(e, stages_.dereverb && pending_.rt60 > 0.05f); }
     double sampleRate() const { return sampleRate_; }
 
 private:
@@ -97,6 +99,8 @@ private:
 
     // De-reverb apres le debruitage : retard fixe d'une trame, actif ou non
     Dereverb dr_[kMaxChannels];
+    bool drActive_ = false; // thread audio : de-reverb en service (sinon contourne, sans retard)
+    int latencyFor(Engine e, bool dr) const { return (1 + (e == Max ? 3 : 1) + (dr ? 1 : 0)) * kDnFrame + lookahead_; }
 
     // Filtres : HPF + EQ (meme coefficients pour tous les canaux, etat par canal)
     Biquad hpf_, eq_[kNumEq], dsSplit_, dsDetect_, corr_[3];

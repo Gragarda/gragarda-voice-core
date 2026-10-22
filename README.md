@@ -7,8 +7,8 @@ Chain: input trim → high-pass → denoise (RNNoise or DeepFilterNet 3) → de-
 additive EQ → leveler (short-term LUFS target) → look-ahead limiter. Driven by 4 macros (Clean, Warmth, Clarity, Punch).
 Plus `Calibration`: analyzes 5 s of silence + 15 s of speech and suggests macros / mic correction, and estimates the room RT60 to switch the de-reverb on (`Macros::rt60`).
 
-Constraints: planar float audio, any block size, no allocation or lock in `process()`, fixed latency
-(`VoiceChain::latencySamples()`). Denoisers are trained at 48 kHz.
+Constraints: planar float audio, any block size, no allocation or lock in `process()`, latency fixed by the engine and the de-reverb
+(`VoiceChain::latencySamples()`, +10 ms only while the de-reverb runs). Denoisers are trained at 48 kHz.
 
 ## Use in a project
 

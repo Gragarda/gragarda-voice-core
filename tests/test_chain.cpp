@@ -50,10 +50,27 @@ int main(int argc, char** argv)
     if (argc > 1) gModel = argv[1];
     std::setvbuf(stdout, nullptr, _IONBF, 0); // voir les mesures meme si un assert tombe
 
-    // Latence fixe : debruitage 2x480 + de-reverb 480 + limiteur 72 = 31.5 ms, identique debruitage on/off
+    // Latence : debruitage 2x480 + limiteur 72 = 21.5 ms, identique debruitage on/off ;
+    // + 480 (de-reverb) seulement quand il tourne
     VoiceChain vc;
     vc.prepare(48000, 2);
-    assert(vc.latencySamples() == 1512);
+    assert(vc.latencySamples() == 1032);
+    {
+        VoiceChain v; v.prepare(48000, 1);
+        VoiceChain::Macros m; m.rt60 = 0.8f; v.setMacros(m);
+        assert(v.latencySamples() == 1512);
+        VoiceChain::Stages st; st.dereverb = false; v.setStages(st);
+        assert(v.latencySamples() == 1032);
+        // l'impulsion ressort bien a la latence annoncee, de-reverb coupe puis remis
+        for (bool on : {false, true}) {
+            st.dereverb = on; v.setStages(st);
+            std::vector<float> x(6000, 0.f); x[100] = 0.5f;
+            float* p[1] = {x.data()}; v.process(p, 1, x.size());
+            size_t k = 0;
+            for (size_t i = 0; i < x.size(); ++i) if (std::fabs(x[i]) > std::fabs(x[k])) k = i;
+            assert(k >= 100 + (size_t)v.latencySamples() && k <= 103 + (size_t)v.latencySamples());
+        }
+    }
 
     // Silence reste silence
     {
@@ -154,11 +171,11 @@ int main(int argc, char** argv)
         assert(k >= 100 + (size_t)v.latencySamples() && k <= 103 + (size_t)v.latencySamples()); // filtres = quelques echantillons d'etalement
     }
 
-    // Qualite max (DeepFilterNet) : latence 5x480 + 72 = 51.5 ms ; vraie voix-like ressort exactement a cette latence
+    // Qualite max (DeepFilterNet) : latence 4x480 + 72 = 41.5 ms (sans de-reverb) ; vraie voix-like ressort exactement a cette latence
     if (gModel) {
         VoiceChain v; v.prepare(48000, 1, gModel); v.setEngine(VoiceChain::Max);
         assert(v.maxAvailable());
-        assert(v.latencySamples() == 2472);
+        assert(v.latencySamples() == 1992);
         const size_t M = 48000 * 3;
         std::vector<float> x(M), y;
         unsigned s = 3;
@@ -172,9 +189,9 @@ int main(int argc, char** argv)
         y = x;
         float* p[1] = {y.data()}; v.process(p, 1, M);
         int best = 0; double bc = -2;
-        for (int d = 2380; d < 2580; ++d) {
+        for (int d = 1900; d < 2100; ++d) {
             double c = 0, ex = 0, ey = 0;
-            for (size_t i = 48000; i + 2580 < M; ++i) { c += x[i] * y[i + d]; ex += x[i] * x[i]; ey += y[i + d] * y[i + d]; }
+            for (size_t i = 48000; i + 2100 < M; ++i) { c += x[i] * y[i + d]; ex += x[i] * x[i]; ey += y[i + d] * y[i + d]; }
             c /= std::sqrt(ex * ey);
             if (c > bc) { bc = c; best = d; }
         }
