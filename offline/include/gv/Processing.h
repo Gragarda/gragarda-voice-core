@@ -20,6 +20,11 @@ struct Preset {
     float deessOffsetDb = 6;    // le de-esser agit au-dessus de la sibilance moyenne mesuree + offset
     float targetRangeDb = 8;    // plage dynamique visee par le compresseur
     float targetLufs = -14, ceilingDbtp = -1;
+    // Options avancees : cles JSON "pops", "hpf", ... a 0 pour couper un etage (le web les ajoute en tete du preset)
+    struct Stages {
+        bool pops = true, hpf = true, notch = true, denoise = true, dereverb = true, eq = true, deesser = true,
+             leveler = true, compressor = true, loudness = true, limiter = true;
+    } use;
 };
 Preset parsePreset(const std::string& json);
 

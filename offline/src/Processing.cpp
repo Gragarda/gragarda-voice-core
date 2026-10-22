@@ -157,6 +157,10 @@ Preset parsePreset(const std::string& j)
     num(j, "highShelfHz", p.highShelfHz); num(j, "highShelfDb", p.highShelfDb);
     num(j, "deessOffsetDb", p.deessOffsetDb); num(j, "targetRangeDb", p.targetRangeDb);
     num(j, "targetLufs", p.targetLufs); num(j, "ceilingDbtp", p.ceilingDbtp);
+    auto flag = [&](const char* k, bool& v) { float f = v ? 1.0f : 0.0f; num(j, k, f); v = f != 0.0f; };
+    flag("pops", p.use.pops); flag("hpf", p.use.hpf); flag("notch", p.use.notch); flag("denoise", p.use.denoise);
+    flag("dereverb", p.use.dereverb); flag("eq", p.use.eq); flag("deesser", p.use.deesser); flag("leveler", p.use.leveler);
+    flag("compressor", p.use.compressor); flag("loudness", p.use.loudness); flag("limiter", p.use.limiter);
     return p;
 }
 
@@ -258,10 +262,10 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     // 1. Passe-haut 18 dB/oct : Butterworth ordre 3 = 1er ordre + biquad Q=1
     Biquad hp;
     hp.design(Biquad::HighPass, sr, p.hpfHz, 1.0);
-    for (auto& c : b.ch) { highPass1(c, sr, p.hpfHz); hp.process(c); }
+    for (auto& c : b.ch) if (p.use.hpf) { highPass1(c, sr, p.hpfHz); hp.process(c); }
 
     // 1b. Raies tonales stables : coupe-bande etroit (Q 30, ~+-12 Hz a 720 Hz), 2 passes = ~ -40 dB au centre
-    for (float f : a.toneHz) {
+    for (float f : p.use.notch ? a.toneHz : std::vector<float>{}) {
         Biquad nf;
         nf.design(Biquad::Notch, sr, f, 30.0);
         for (auto& c : b.ch) { nf.process(c); nf.process(c); }
@@ -270,7 +274,9 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     // 2. Debruitage. Externe (web : DeepFilterNet 3) : toujours, il separe la parole de tout le reste, y compris
     // une respiration pres du micro pendant que d'autres parlent. Sinon RNNoise, dose selon le bruit :
     // rien sous -70 dBFS (evite la "voix sous l'eau"), plein a partir de -45.
-    if (externalDenoise) {
+    if (!p.use.denoise) {
+        info.denoiser = "off";
+    } else if (externalDenoise) {
         for (auto& c : b.ch) externalDenoise(c);
         info.denoiser = "deepfilternet";
         info.denoiseWet = 1;
@@ -291,6 +297,7 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         hp200.process(m);
         info.rt60 = estimateRt60(m, sr, a.noiseDb);
         info.dereverb = info.rt60 > kRt60On;
+        info.dereverb = info.dereverb && p.use.dereverb;
         if (info.dereverb) dereverb(b, std::min(info.rt60, 1.5f));
     }
 
@@ -310,7 +317,7 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
         {Biquad::HighShelf, p.highShelfHz, p.highShelfDb, 0.7071f},
     };
     for (const auto& e : eq) {
-        if (e.db == 0 || e.f >= sr / 2) continue;
+        if (!p.use.eq || e.db == 0 || e.f >= sr / 2) continue;
         Biquad f;
         f.design(e.t, sr, e.f, e.q, e.db);
         for (auto& c : b.ch) f.process(c);
@@ -318,16 +325,16 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
 
     // 5. De-esser : seuil relatif a la sibilance moyenne mesuree
     info.deessThreshDb = cl.sibilanceDb + p.deessOffsetDb;
-    deess(b, info.deessThreshDb);
+    if (p.use.deesser) deess(b, info.deessThreshDb);
 
     // 5b. Nivellement multi-personnes (lent), puis plage dynamique remesuree pour doser le compresseur
-    info.levelDb = levelSpeakers(b, speechDb, p.levelMaxDb);
+    if (p.use.leveler) info.levelDb = levelSpeakers(b, speechDb, p.levelMaxDb);
     float p10, p95;
     loudnessRange(b, p10, p95);
 
     // 6. Compresseur 3:1 : seuil place pour ramener la plage restante vers celle du preset
     const float excess = std::clamp(p95 - p10 - p.targetRangeDb, 0.0f, 12.0f);
-    if (excess > 0) {
+    if (p.use.compressor && excess > 0) {
         const auto env = peakEnvDb(b);
         std::vector<float> voiced;
         for (size_t i = 0; i < env.size(); i += 48) // ponytail: 1 echantillon sur 48 suffit pour un percentile
@@ -344,17 +351,17 @@ ProcessInfo processChain(AudioBuffer& b, const Preset& p, const AnalysisResult& 
     const float ceiling = dbToLin(p.ceilingDbtp - 0.1f); // marge pour l'interpolation entre gains
     const auto pre = b.ch;
     constexpr float kMaxGainDb = 36; // prise lointaine debruitee : la voix propre peut etre a -36 LUFS
-    float gainDb = std::clamp(p.targetLufs - (float)l0, -20.0f, kMaxGainDb);
+    float gainDb = p.use.loudness ? std::clamp(p.targetLufs - (float)l0, -20.0f, kMaxGainDb) : 0.0f;
     // Secante : sous limitation, +1 dB de gain ne rapporte qu'une fraction de dB de loudness
     float prevGain = 0, prevLufs = (float)l0;
     for (int it = 0; it < 8; ++it) { // ponytail: 8 passes de limiteur max ; converge en 2-3 sur de la voix
         b.ch = pre;
         for (auto& c : b.ch)
             for (float& v : c) v *= dbToLin(gainDb);
-        limitTruePeak(b, ceiling);
+        if (p.use.limiter) limitTruePeak(b, ceiling);
         info.outLufs = (float)integratedLufs(b);
         const float err = p.targetLufs - info.outLufs;
-        if (std::fabs(err) < 0.1f || gainDb >= kMaxGainDb) break;
+        if (!p.use.loudness || std::fabs(err) < 0.1f || gainDb >= kMaxGainDb) break;
         const float slope = std::clamp((info.outLufs - prevLufs) / (gainDb - prevGain + 1e-6f), 0.1f, 1.0f);
         prevGain = gainDb;
         prevLufs = info.outLufs;

@@ -211,7 +211,7 @@ void VoiceChain::applyMacros(const Macros& m)
     corr_[0].design(Biquad::LowShelf, sr, 150.0, 0.7, m.corrLow);
     corr_[1].design(Biquad::Peak, sr, 4000.0, 0.7, m.corrPresence);
     corr_[2].design(Biquad::HighShelf, sr, 7000.0, 0.7, m.corrAir);
-    for (auto& d : dr_) d.setRt60(m.rt60);
+    for (auto& d : dr_) d.setRt60(stages_.dereverb ? m.rt60 : 0.0f);
 }
 
 void VoiceChain::setGainDb(float db)
@@ -227,6 +227,7 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
     const float ceil = dbToLin(kLimCeilDb);
     if (dirty_.exchange(false))
         applyMacros(pending_);
+    const Stages on = stages_; // ponytail: copie sans verrou comme pending_
     const int L = lookahead_, R = L + 1;
     float x[kMaxChannels] = {};
 
@@ -239,7 +240,7 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
             dry_[(size_t)c * kDryLen + dryPos_] = raw;
             const float s = raw * currentGain_;
             x[c] = dnOut_[c][dnPos_];
-            dnIn_[c][dnPos_] = run(hpf_, hpfZ_[c], s);
+            dnIn_[c][dnPos_] = on.hpf ? run(hpf_, hpfZ_[c], s) : s;
         }
         if (++dnPos_ == kDnFrame) {
             denoiseFrame(nc);
@@ -250,9 +251,9 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
         float peak = 0.0f;
         for (int c = 0; c < nc; ++c) {
             float s = x[c];
-            for (int k = 0; k < 3; ++k)
+            for (int k = 0; on.eq && k < 3; ++k)
                 s = run(corr_[k], corrZ_[k][c], s);
-            for (int k = 0; k < kNumSubEq; ++k)
+            for (int k = 0; on.eq && k < kNumSubEq; ++k)
                 s = run(eq_[k], eqZ_[k][c], s);
             x[c] = s;
             peak = std::max(peak, std::fabs(s));
@@ -262,7 +263,8 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
         const float lvl = linToDb(peak);
         compEnvDb_ = lvl + (lvl > compEnvDb_ ? compAtt_ : compRel_) * (compEnvDb_ - lvl);
         const float over = compEnvDb_ - compThreshDb_;
-        const float compGain = compMakeup_ * (over > 0 ? dbToLin(-over * (1.0f - 1.0f / compRatio_)) : 1.0f);
+        const float compGain = !on.compressor ? 1.0f
+                             : compMakeup_ * (over > 0 ? dbToLin(-over * (1.0f - 1.0f / compRatio_)) : 1.0f);
 
         // 7. De-esser : detection 6.5 kHz, attenuation de la bande > 5 kHz seulement
         float hi[kMaxChannels] = {}, sib = 0.0f;
@@ -273,13 +275,13 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
         }
         dsEnv_ = sib + (sib > dsEnv_ ? dsAtt_ : dsRel_) * (dsEnv_ - sib);
         const float dsOver = linToDb(dsEnv_) - dsThreshDb_;
-        const float dsGain = dsOver > 0 ? dbToLin(-std::min(kDsMaxCutDb, dsOver * 0.75f)) : 1.0f;
+        const float dsGain = on.deesser && dsOver > 0 ? dbToLin(-std::min(kDsMaxCutDb, dsOver * 0.75f)) : 1.0f;
 
         // 8. EQ additif + mesure de sonie (filtre K)
         float ms = 0.0f;
         for (int c = 0; c < nc; ++c) {
             float s = x[c] + (dsGain - 1.0f) * hi[c]; // bas + dsGain*haut, reconstruction exacte si dsGain=1
-            for (int k = kNumSubEq; k < kNumEq; ++k)
+            for (int k = kNumSubEq; on.eq && k < kNumEq; ++k)
                 s = run(eq_[k], eqZ_[k][c], s);
             x[c] = s;
             const float k = run(kw2_, kwZ_[c][1], run(kw1_, kwZ_[c][0], s));
@@ -296,7 +298,7 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
             const float want = std::clamp(lvTarget_ - st, -kLvMaxCutDb, kLvMaxBoostDb);
             lvGainDb_ += std::clamp(want - lvGainDb_, -lvStep_, lvStep_);
         }
-        const float lvGain = dbToLin(lvGainDb_);
+        const float lvGain = on.leveler ? dbToLin(lvGainDb_) : 1.0f;
         peak = 0.0f;
         for (int c = 0; c < nc; ++c) {
             x[c] *= lvGain;
@@ -304,7 +306,7 @@ void VoiceChain::process(float* const* channels, int numChannels, size_t numFram
         }
 
         // 10. Limiteur a anticipation : gain = min du gain requis sur la fenetre, relache lente
-        reqGain_[pos_ % R] = peak > ceil ? ceil / peak : 1.0f;
+        reqGain_[pos_ % R] = on.limiter && peak > ceil ? ceil / peak : 1.0f;
         const float target = *std::min_element(reqGain_.begin(), reqGain_.end()); // ponytail: O(L) par echantillon, L=72 ; deque monotone si L grandit
         limGain_ = target < limGain_ ? target : target + limRel_ * (limGain_ - target);
 

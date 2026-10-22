@@ -245,6 +245,17 @@ int main(int argc, char** argv)
         assert(rOn < rOff - 4);
     }
 
+    // Options avancees : tout coupe = entree retardee de la latence, a l'identique (meme latence)
+    {
+        VoiceChain v; v.prepare(48000, 1); v.setDenoise(false);
+        VoiceChain::Macros m; m.rt60 = 0.8f; v.setMacros(m);
+        v.setStages({false, false, false, false, false, false, false});
+        auto x = voice(0.5f, N), y = x;
+        float* p[1] = {y.data()}; v.process(p, 1, N);
+        const size_t L = (size_t)v.latencySamples();
+        for (size_t i = L; i < N; ++i) assert(std::fabs(y[i] - x[i - L]) < 1e-6f);
+    }
+
     // Macros a 50 partout = reglages par defaut (reference validee a l'ecoute)
     {
         VoiceChain a, b; a.prepare(48000, 1); b.prepare(48000, 1);
