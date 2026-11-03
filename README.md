@@ -1,5 +1,7 @@
 # Gragarda Voice — DSP core
 
+**Gragarda Voice:** [OBS filter](https://github.com/Gragarda/gragarda-voice) · [VST3 / standalone](https://github.com/Gragarda/gragarda-voice-vst) · [Web app](https://github.com/Gragarda/gragarda-voice-web) · **DSP core**
+
 Host-independent voice processing chain used by [Gragarda Voice](https://github.com/Gragarda/gragarda-voice) (OBS filter)
 and [Gragarda Voice VST](https://github.com/Gragarda/gragarda-voice-vst) (VST3 plugin).
 
